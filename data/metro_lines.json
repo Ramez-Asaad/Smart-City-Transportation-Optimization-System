@@ -1,0 +1,20 @@
+[
+  {
+	"LineID": "M1",
+	"Name": "Line 1 (Helwan-New Marg)",
+	"Stations": ["12", "1", "3", "F2", "11"],
+	"DailyPassengers": 1500000
+  },
+  {
+	"LineID": "M2",
+	"Name": "Line 2 (Shubra-Giza)",
+	"Stations": ["11", "F2", "3", "10", "8"],
+	"DailyPassengers": 1200000
+  },
+  {
+	"LineID": "M3",
+	"Name": "Line 3 (Airport-Imbaba)",
+	"Stations": ["F1", "5", "2", "3", "9"],
+	"DailyPassengers": 800000
+  }
+]
