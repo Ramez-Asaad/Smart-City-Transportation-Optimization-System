@@ -1,163 +1,179 @@
-import heapq
-from collections import defaultdict
-from datetime import datetime, timedelta
+import pandas as pd
 from collections import defaultdict
 
-# === Scheduling Bus and Metro using DP ===
-def generate_bus_schedule(graph, bus_data, start_time="06:00", end_time="22:00"):
+# Load data
+bus_routes = pd.read_json('data/bus_routes.json')
+metro_lines = pd.read_json('data/metro_lines.json')
+public_transportation_demand = pd.read_csv('data/public_transportation_demand.csv')
+public_transportation_demand.columns = public_transportation_demand.columns.str.strip()
+traffic_flow_patterns = pd.read_csv('data/traffic.csv')
+
+# =======================
+# Demand Matrix Builder
+# =======================
+def build_demand_matrix(demand_df):
     """
-    Dynamic programming to optimize bus schedules across the day
-    Arguments:
-      graph: dictionary of bus stops and connections (frontend will send it)
-      bus_data: list of bus routes and buses assigned
+    Converts the transportation demand CSV into a dictionary for quick lookup.
+    Returns a dictionary with keys as (from_id, to_id) and values as daily passengers.
+    """
+    demand_matrix = {}
+    for _, row in demand_df.iterrows():
+        demand_matrix[(str(row['FromID']), str(row['ToID']))] = row['DailyPassengers']
+    return demand_matrix
+
+# =======================
+# Dynamic Programming Optimizer
+# =======================
+def optimize_schedule_dp(routes, demand_matrix, max_units, transport_type):
+    """
+    Optimizes vehicle allocation across routes using dynamic programming.
+    
+    Args:
+        routes: List of dictionaries representing bus or metro lines.
+        demand_matrix: Dict mapping (from_id, to_id) to passenger counts.
+        max_units: Maximum number of buses or trains to allocate.
+        transport_type: 'bus' or 'metro'
+
     Returns:
-      Dictionary of schedules
+        allocation: Dict mapping route/line ID to allocated units.
     """
-    schedule = {}
-    start_dt = datetime.strptime(start_time, "%H:%M")
-    end_dt = datetime.strptime(end_time, "%H:%M")
-    total_minutes = int((end_dt - start_dt).total_seconds() / 60)
+    n = len(routes)
+    dp = [[0] * (max_units + 1) for _ in range(n + 1)]
+    route_ids = [r['RouteID'] if transport_type == "bus" else r['LineID'] for r in routes]
 
-    for bus in bus_data:
-        route_id = bus['RouteID']
-        buses = bus['BusesAssigned']
-        interval = total_minutes // buses
-        current_time = start_dt
-        route_schedule = []
+    def route_demand(route):
+        stops = list(map(str.strip, route['Stops'].split(','))) if transport_type == 'bus' else list(map(str.strip, route['Stations'].split(',')))
+        total = 0
+        for i in range(len(stops)):
+            for j in range(i + 1, len(stops)):
+                total += demand_matrix.get((stops[i], stops[j]), 0)
+        return total
 
-        while current_time <= end_dt:
-            route_schedule.append(current_time.strftime("%H:%M"))
-            current_time += timedelta(minutes=interval)
-
-        schedule[route_id] = route_schedule
-    return schedule
-
-def generate_metro_schedule(graph, metro_data, start_time="05:00", end_time="00:00", trains_per_line=40):
-    """
-    Dynamic programming to optimize metro schedules across the day
-    Arguments:
-      graph: dictionary of metro stations and connections (frontend will send it)
-      metro_data: list of metro lines
-    Returns:
-      Dictionary of schedules
-    """
-    schedule = {}
-    start_dt = datetime.strptime(start_time, "%H:%M")
-    end_dt = datetime.strptime(end_time, "%H:%M")
-    total_minutes = int((end_dt - start_dt).total_seconds() / 60)
-
-    for metro in metro_data:
-        line_name = metro['Name']
-        interval = total_minutes // trains_per_line
-        current_time = start_dt
-        line_schedule = []
-
-        while current_time <= end_dt:
-            line_schedule.append(current_time.strftime("%H:%M"))
-            current_time += timedelta(minutes=interval)
-
-        schedule[line_name] = line_schedule
-    return schedule
-
-# === Resource Allocation (Road Maintenance using DP) ===
-def resource_allocation_dp(graph, budget):
-    """
-    Allocate transportation resources efficiently to maintain roads
-    Arguments:
-      graph: dictionary of roads and properties
-      budget: total budget for maintenance
-    Returns:
-      List of roads to prioritize
-    """
-    roads = []
-    for node in graph:
-        for neighbor, properties in graph[node]:
-            cost = (10 - properties['Condition']) * 10
-            benefit = properties['Capacity'] * properties['Condition']
-            roads.append((cost, benefit, node, neighbor))
-
-    n = len(roads)
-    dp = [[0 for _ in range(budget + 1)] for _ in range(n + 1)]
+    route_demand_list = [route_demand(r) for r in routes]
 
     for i in range(1, n + 1):
-        cost, benefit, _, _ = roads[i - 1]
-        for b in range(budget + 1):
-            if b >= cost:
-                dp[i][b] = max(dp[i-1][b], dp[i-1][b - int(cost)] + benefit)
-            else:
-                dp[i][b] = dp[i-1][b]
+        for u in range(max_units + 1):
+            for alloc in range(u + 1):
+                benefit = route_demand_list[i - 1] * alloc
+                dp[i][u] = max(dp[i][u], dp[i - 1][u - alloc] + benefit)
 
-    chosen = []
-    b = budget
+    allocation = dict()
+    units_left = max_units
     for i in range(n, 0, -1):
-        if dp[i][b] != dp[i-1][b]:
-            cost, _, from_node, to_node = roads[i - 1]
-            chosen.append((from_node, to_node))
-            b -= int(cost)
+        for alloc in range(units_left + 1):
+            if dp[i][units_left] == dp[i - 1][units_left - alloc] + route_demand_list[i - 1] * alloc:
+                allocation[route_ids[i - 1]] = alloc
+                units_left -= alloc
+                break
 
-    return chosen
+    return allocation
 
-
-def build_integrated_network(road_graph, bus_data, metro_data):
+# =======================
+# Schedule Generators
+# =======================
+def generate_optimized_schedule(routes, allocation, transport_type):
     """
-    Create an integrated transportation network connecting bus stops, metro stations, and roads
-    Arguments:
-        road_graph: Dictionary of roads {node: [(neighbor, properties)]}
-        bus_data: List of bus routes [{RouteID, Stops, BusesAssigned}]
-        metro_data: List of metro lines [{Name, Stations, DailyPassengers}]
+    Creates readable schedules using optimal allocations.
+
+    Args:
+        routes: DataFrame of bus or metro data.
+        allocation: Dict of assigned units.
+        transport_type: 'bus' or 'metro'
+
     Returns:
-        integrated_graph: A combined graph with buses, metros, and roads
+        schedule: List of dicts summarizing schedule per route
     """
-    integrated_graph = defaultdict(list)
+    schedule = []
+    for _, row in routes.iterrows():
+        route_id = row['RouteID'] if transport_type == 'bus' else row['LineID']
+        name = f"Bus Route" if transport_type == 'bus' else "Metro Line"
+        stops_key = 'Stops' if transport_type == 'bus' else 'Stations'
+        assigned_units = allocation.get(route_id, 1)
+        interval = 1440 // assigned_units if assigned_units else 0
 
-    # Add all road connections
-    for node, neighbors in road_graph.items():
-        for neighbor, properties in neighbors:
-            integrated_graph[node].append((neighbor, properties))
+        schedule.append({
+            name: route_id,
+            'Stops/Stations': row[stops_key],
+            'Assigned Units': assigned_units,
+            'Estimated Interval (min)': interval
+        })
+    return schedule
 
-    # Add bus routes (consider bus stops as connections too)
+# =======================
+# Integrated Network Builder
+# =======================
+def build_integrated_network(bus_data, metro_data):
+    """
+    Creates an integrated network graph combining bus routes and metro lines.
+    Helps visualize and connect transportation options.
+    """
+    network = defaultdict(list)
+
     for bus in bus_data:
         stops = list(map(str.strip, bus['Stops'].split(',')))
         for i in range(len(stops) - 1):
-            from_stop = stops[i]
-            to_stop = stops[i + 1]
-            integrated_graph[from_stop].append((to_stop, {'type': 'bus_route'}))
-            integrated_graph[to_stop].append((from_stop, {'type': 'bus_route'}))
+            network[stops[i]].append((stops[i+1], 'bus'))
+            network[stops[i+1]].append((stops[i], 'bus'))
 
-    # Add metro lines (connect stations)
     for metro in metro_data:
         stations = list(map(str.strip, metro['Stations'].split(',')))
         for i in range(len(stations) - 1):
-            from_station = stations[i]
-            to_station = stations[i + 1]
-            integrated_graph[from_station].append((to_station, {'type': 'metro_line'}))
-            integrated_graph[to_station].append((from_station, {'type': 'metro_line'}))
+            network[stations[i]].append((stations[i+1], 'metro'))
+            network[stations[i+1]].append((stations[i], 'metro'))
 
-    return integrated_graph
+    return network
 
+# =======================
+# Transfer Point Analyzer
+# =======================
 def find_transfer_points(bus_data, metro_data):
     """
-    Analyze transfer points between bus and metro stops
-    Arguments:
-        bus_data: List of bus routes
-        metro_data: List of metro lines
-    Returns:
-        List of optimal transfer points
+    Finds optimal transfer points where bus stops intersect with metro stations.
+    These points are key for designing efficient multimodal transportation.
     """
     bus_stops = set()
     metro_stations = set()
 
-    # Gather all bus stops
     for bus in bus_data:
-        stops = list(map(str.strip, bus['Stops'].split(',')))
-        bus_stops.update(stops)
-
-    # Gather all metro stations
+        bus_stops.update(map(str.strip, bus['Stops'].split(',')))
     for metro in metro_data:
-        stations = list(map(str.strip, metro['Stations'].split(',')))
-        metro_stations.update(stations)
+        metro_stations.update(map(str.strip, metro['Stations'].split(',')))
 
-    # Find intersections (good transfer points)
     transfer_points = bus_stops.intersection(metro_stations)
-
     return list(transfer_points)
+
+# =======================
+# Main Execution
+# =======================
+
+# Build demand
+bus_demand_matrix = build_demand_matrix(public_transportation_demand)
+metro_demand_matrix = bus_demand_matrix  # Same dataset used for metro as well
+
+# Optimize allocations
+optimized_bus_alloc = optimize_schedule_dp(bus_routes.to_dict('records'), bus_demand_matrix, max_units=200, transport_type="bus")
+optimized_metro_alloc = optimize_schedule_dp(metro_lines.to_dict('records'), metro_demand_matrix, max_units=30, transport_type="metro")
+
+# Generate schedules
+bus_schedule = generate_optimized_schedule(bus_routes, optimized_bus_alloc, 'bus')
+metro_schedule = generate_optimized_schedule(metro_lines, optimized_metro_alloc, 'metro')
+
+# Display schedules
+print("\nOptimized Bus Schedule:")
+for bus in bus_schedule:
+    print(bus)
+
+print("\nOptimized Metro Schedule:")
+for metro in metro_schedule:
+    print(metro)
+
+# Build and display integrated network
+integrated_network = build_integrated_network(bus_routes.to_dict('records'), metro_lines.to_dict('records'))
+print("\nIntegrated Network Nodes:")
+for node, edges in integrated_network.items():
+    print(f"{node}: {edges}")
+
+# Analyze and display transfer points
+transfer_points = find_transfer_points(bus_routes.to_dict('records'), metro_lines.to_dict('records'))
+print("\nOptimal Transfer Points:")
+print(transfer_points)
