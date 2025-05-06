@@ -131,41 +131,40 @@ class PublicTransitOptimizer:
         
         return values
     
-    def _dp_allocate(self, values, max_units, min_units, max_per_route):
-        """Dynamic programming allocation with constraints"""
-        n = len(values)
-        dp = [[0]*(max_units+1) for _ in range(n+1)]
-        
-        # DP table filling
-        for i in range(1, n+1):
-            route_id, value = values[i-1]
-            for u in range(max_units+1):
-                max_benefit = 0
-                for alloc in range(min_units, min(u, max_per_route)+1):
-                    benefit = value * min(alloc, 10)  # Diminishing returns after 10 units
-                    if dp[i-1][u-alloc] + benefit > max_benefit:
-                        max_benefit = dp[i-1][u-alloc] + benefit
-                dp[i][u] = max_benefit
-        
-        # Backtrack to find allocation
-        allocation = {}
-        units_left = max_units
-        for i in range(n, 0, -1):
-            route_id, value = values[i-1]
-            found = False
-            for alloc in range(min(units_left, max_per_route), min_units-1, -1):
-                benefit = value * min(alloc, 10)
-                if dp[i][units_left] == dp[i-1][units_left-alloc] + benefit:
-                    allocation[route_id] = alloc
-                    units_left -= alloc
-                    found = True
-                    break
-            if not found and units_left >= min_units:
-                allocation[route_id] = min_units
-                units_left -= min_units
-        
-        return allocation
-    
+def _dp_allocate(self, values, max_units, min_units, max_per_route):
+    """Simplified DP allocation with constraints"""
+    n = len(values)
+    # dp[i][u] = max benefit for first i routes using u units
+    dp = [[0] * (max_units + 1) for _ in range(n + 1)]
+    allocation = {}
+
+    # Build DP table
+    for i in range(1, n + 1):
+        route_id, value = values[i-1]
+        for u in range(max_units + 1):
+            # Try all possible allocations for this route
+            max_possible = min(u, max_per_route)
+            for alloc in range(min_units, max_possible + 1):
+                current_value = value * min(alloc, 10)  # Diminishing returns
+                if dp[i-1][u-alloc] + current_value > dp[i][u]:
+                    dp[i][u] = dp[i-1][u-alloc] + current_value
+
+    # Backtrack to find allocation
+    remaining = max_units
+    for i in range(n, 0, -1):
+        route_id, value = values[i-1]
+        # Find the allocation that gave us this DP value
+        for alloc in range(min(remaining, max_per_route), min_units-1, -1):
+            if dp[i][remaining] == dp[i-1][remaining-alloc] + value * min(alloc, 10):
+                allocation[route_id] = alloc
+                remaining -= alloc
+                break
+        else:  # No allocation found (shouldn't happen if constraints are valid)
+            allocation[route_id] = min_units
+            remaining -= min_units
+
+    return allocation
+
     def generate_schedules(self, bus_allocation, metro_allocation):
         """Generates optimized schedules with transfer information"""
         bus_schedules = []
