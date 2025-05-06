@@ -1,0 +1,6 @@
+streamlit
+pandas
+folium
+networkx
+streamlit_folium
+collections
