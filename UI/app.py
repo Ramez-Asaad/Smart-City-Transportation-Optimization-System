@@ -1,16 +1,18 @@
 import streamlit as st
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pandas as pd
 import numpy as np
+import folium
 from algorithms.mst import run_mst
 from streamlit_folium import st_folium
 import streamlit.components.v1 as components
+from algorithms.a_star import load_graph_from_csv, a_star, find_nearest_hospital
+
+# Ensure the parent directory is in the path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 st.set_page_config("Cairo Smart City", layout="wide")
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Initialize session state for network visualization and results
 if "network_visualization" not in st.session_state:
@@ -120,33 +122,55 @@ elif menu == "Algorithms":
 
     algo_type = st.selectbox("Choose Algorithm", ["Dijkstra", "A*", "Greedy", "DP"])
 
-    st.text_input("Source Point", "e.g., A1")
-    st.text_input("Destination Point", "e.g., D4")
-    st.selectbox("Time of Day", ["Morning Rush", "Evening", "Night"])
-    st.checkbox("Simulate Road Closure")
-    st.checkbox("Enable Emergency Mode")
+    source_point = st.text_input("Source Point", "e.g., A1")
+    destination_point = st.text_input("Destination Point", "e.g., D4")
+    time_of_day = st.selectbox("Time of Day", ["Morning Rush", "Evening", "Night"])
+    simulate_road_closure = st.checkbox("Simulate Road Closure")
+    enable_emergency_mode = st.checkbox("Enable Emergency Mode")
 
     if st.button("Run Algorithm"):
-        st.success("Algorithm executed!")
+        if algo_type == "A*":
+            # Load the graph and facilities data
+            graph = load_graph_from_csv('data/graph.csv')
+            facilities_df = pd.read_csv('data/facilities.csv')
+            hospitals = facilities_df[facilities_df['Type'].str.lower() == 'hospital']
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Travel Time", "15 min")
-        col2.metric("Cost", "EGP 25")
-        col3.metric("Coverage", "98%")
+            # Run the A* algorithm
+            path, cost, hospital = find_nearest_hospital(source_point, graph, hospitals)
 
-        st.subheader("Network Visualization")
-        st.info("[Mock Graph Placeholder]")
+            if path:
+                st.success(f"Nearest hospital: {hospital}")
+                st.markdown(f"**Path:** {' → '.join(path)}")
+                st.metric("Total Travel Cost / Time", f"{cost:.2f} units")
 
-        st.subheader("Result Table")
-        st.table(pd.DataFrame({
-            "Step": [1, 2, 3, 4],
-            "Node": ["A1", "B2", "C3", "D4"],
-            "Action": ["Start", "Move", "Move", "Arrive"],
-            "Cost": [0, 5, 10, 15]
-        }))
+                # Generate a map with the A* route
+                neighborhoods = pd.read_csv('data/neighborhoods.csv')
+                node_positions = {
+                    str(row["ID"]): (row["Y-coordinate"], row["X-coordinate"])
+                    for _, row in neighborhoods.iterrows()
+                }
 
-        st.subheader("Congestion Chart")
-        st.bar_chart(np.random.randint(10, 50, size=12))
+                m = folium.Map(location=[
+                    neighborhoods["Y-coordinate"].mean(),
+                    neighborhoods["X-coordinate"].mean()
+                ], zoom_start=12)
+
+                # Add the A* route to the map
+                for i in range(len(path) - 1):
+                    from_node = path[i]
+                    to_node = path[i + 1]
+                    if from_node in node_positions and to_node in node_positions:
+                        folium.PolyLine(
+                            [node_positions[from_node], node_positions[to_node]],
+                            color="blue", weight=3, tooltip=f"Route: {from_node} → {to_node}"
+                        ).add_to(m)
+
+                # Display the map
+                st_folium(m, height=600)
+            else:
+                st.error("No valid path found to any hospital.")
+        else:
+            st.warning("This algorithm is not yet implemented.")
 
 # ------ REPORTS ------
 elif menu == "Reports":
