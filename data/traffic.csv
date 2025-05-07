@@ -1,4 +1,4 @@
-RoadID, Morning Peak(veh/h), Afternoon(veh/h), Evening Peak(veh/h), Night(veh/h))
+RoadID, Morning Peak(veh/h), Afternoon(veh/h), Evening Peak(veh/h), Night(veh/h)
 1-3, 2800, 1500, 2600, 800
 1-8, 2200, 1200, 2100, 600
 2-3, 2700, 1400, 2500, 700
