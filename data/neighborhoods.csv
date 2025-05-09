@@ -14,3 +14,24 @@ ID, Name, Population, Type, X-coordinate, Y-coordinate
 13, New Administrative Capital, 50000, Government, 31.80, 30.02
 14, Al Rehab, 120000, Residential, 31.49, 30.06
 15, Sheikh Zayed, 150000, Residential, 30.94, 30.01
+16, Rod El Farag, 180000, Mixed, 31.23, 30.09
+17, Ramses, 150000, Business, 31.25, 30.06
+18, Tahrir, 80000, Business, 31.24, 30.05
+19, Manial, 160000, Residential, 31.23, 30.02
+20, Garden City, 70000, Residential, 31.25, 30.03
+21, Shorouk, 200000, Residential, 31.63, 30.15
+22, Haram, 300000, Mixed, 31.17, 29.98
+23, Madinaty, 180000, Residential, 31.68, 30.07
+24, Agouza, 160000, Mixed, 31.20, 30.04
+25, 15th May, 120000, Residential, 31.35, 29.84
+26, Torah, 140000, Industrial, 31.28, 29.90
+27, Obour, 150000, Mixed, 31.47, 30.19
+28, Ain Shams, 220000, Residential, 31.32, 30.13
+29, Sadat, 50000, Business, 31.24, 30.04
+30, El-Marg, 180000, Residential, 31.34, 30.16
+31, Attaba, 90000, Business, 31.25, 30.05
+32, Opera, 60000, Mixed, 31.23, 30.04
+33, Airport, 40000, Business, 31.40, 30.12
+34, Kit Kat, 110000, Mixed, 31.21, 30.07
+35, Salam, 130000, Residential, 31.42, 30.16
+36, Gesr El Suez, 140000, Mixed, 31.36, 30.11

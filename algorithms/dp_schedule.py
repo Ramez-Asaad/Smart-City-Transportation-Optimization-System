@@ -1,64 +1,173 @@
 import pandas as pd
-from collections import defaultdict
 import networkx as nx
-import matplotlib.pyplot as plt
-import streamlit as st
-import json
 import folium
-from streamlit_folium import st_folium
+from utils.helpers import load_data, build_map
+from typing import Dict, List, Tuple, Any
+from collections import defaultdict
 
 class PublicTransitOptimizer:
-    def __init__(self, bus_routes, metro_lines, demand_data):
-        self.bus_routes = bus_routes
-        self.metro_lines = metro_lines
+    def __init__(self, bus_routes: pd.DataFrame, metro_lines: pd.DataFrame, demand_data: Dict):
+        """Initialize the optimizer with transit data."""
+        # Load base network data
+        self.neighborhoods, self.roads, self.facilities = load_data()
+        self.base_map, self.node_positions, _, self.base_graph = build_map(
+            self.neighborhoods, self.roads, self.facilities
+        )
+        
+        # Debug: Print base graph nodes
+        print("\nDebug - Base Graph Nodes:", list(self.base_graph.nodes()))
+        
+        # Create set of valid nodes from neighborhoods and facilities
+        self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
+        self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
+        
+        # Debug: Print valid nodes
+        print("\nDebug - Valid Nodes:", sorted(list(self.valid_nodes)))
+        
+        # Store transit data
+        self.bus_routes = self._validate_routes(bus_routes, "bus")
+        self.metro_lines = self._validate_routes(metro_lines, "metro")
         self.demand_data = demand_data
         self.network = nx.Graph()
+        
+        # Initialize transfer points
         self.transfer_points = set()
-        
-    def build_integrated_network(self):
-        """Builds a multimodal transportation network combining bus and metro systems"""
-        # Add bus routes to network
-        for _, route in self.bus_routes.iterrows():
-            stops = self._parse_stops(route['Stops'])
-            for i in range(len(stops)-1):
-                self.network.add_edge(stops[i], stops[i+1], 
-                                     type='bus', 
-                                     route=route['RouteID'],
-                                     capacity=route.get('DailyPassengers', 10000))
-        
-        # Add metro lines to network
-        for _, line in self.metro_lines.iterrows():
-            stations = self._parse_stops(line['Stations'])
-            for i in range(len(stations)-1):
-                self.network.add_edge(stations[i], stations[i+1], 
-                                    type='metro', 
-                                    route=line['LineID'],
-                                    capacity=line.get('DailyPassengers', 500000))
-        
-        # Identify transfer points
         self._identify_transfer_points()
         
-    def _parse_stops(self, stops):
-        """Helper to parse stops whether they're strings or lists"""
-        if isinstance(stops, str):
-            return [s.strip() for s in stops.split(',')]
-        return stops
-    
+    def _validate_routes(self, routes: pd.DataFrame, route_type: str) -> pd.DataFrame:
+        """Validate and clean route data to ensure all stops exist in the network."""
+        valid_routes = []
+        stops_column = 'Stops' if route_type == 'bus' else 'Stations'
+        
+        print(f"\nDebug - Validating {route_type} routes:")
+        
+        for _, route in routes.iterrows():
+            # Convert stops to list of strings
+            stops = [str(s.strip()) for s in route[stops_column].split(',')]
+            print(f"  Route {route.get('RouteID', '')}: Original stops = {stops}")
+            
+            # Filter out invalid stops
+            valid_stops = [stop for stop in stops if stop in self.valid_nodes]
+            print(f"  Route {route.get('RouteID', '')}: Valid stops = {valid_stops}")
+            
+            if len(valid_stops) >= 2:  # Only keep routes with at least 2 valid stops
+                route_copy = route.copy()
+                route_copy[stops_column] = ','.join(valid_stops)
+                valid_routes.append(route_copy)
+            else:
+                print(f"Warning: Skipping {route_type} route {route.get('RouteID', '')} - insufficient valid stops")
+        
+        return pd.DataFrame(valid_routes)
+        
     def _identify_transfer_points(self):
-        """Finds all nodes where bus and metro systems intersect"""
-        bus_nodes = set()
-        metro_nodes = set()
+        """Find intersections between bus and metro networks."""
+        bus_stops = set()
+        metro_stations = set()
         
-        for u, v, data in self.network.edges(data=True):
-            if data['type'] == 'bus':
-                bus_nodes.update([u, v])
-            elif data['type'] == 'metro':
-                metro_nodes.update([u, v])
+        # Collect bus stops
+        for _, route in self.bus_routes.iterrows():
+            stops = [str(s.strip()) for s in route['Stops'].split(',')]
+            bus_stops.update(stop for stop in stops if stop in self.valid_nodes)
         
-        self.transfer_points = bus_nodes.intersection(metro_nodes)
+        # Collect metro stations
+        for _, line in self.metro_lines.iterrows():
+            stations = [str(s.strip()) for s in line['Stations'].split(',')]
+            metro_stations.update(station for station in stations if station in self.valid_nodes)
+        
+        # Find intersections
+        self.transfer_points = bus_stops.intersection(metro_stations)
     
-    def optimize_transfer_points(self):
-        """Optimizes transfer points based on demand and connectivity"""
+    def build_integrated_network(self):
+        """Build a multimodal transportation network."""
+        # Start with the base road network, ensuring string IDs
+        self.network = nx.Graph()
+        
+        # Debug: Print base graph edges before conversion
+        print("\nDebug - Base Graph Edges:")
+        for u, v, data in self.base_graph.edges(data=True):
+            print(f"  Edge {u} -> {v}")
+            self.network.add_edge(str(u), str(v), **data)
+        
+        # Debug: Print network nodes after base graph conversion
+        print("\nDebug - Network Nodes after base graph conversion:", list(self.network.nodes()))
+        
+        # Add bus routes
+        print("\nDebug - Adding bus routes:")
+        for _, route in self.bus_routes.iterrows():
+            stops = [str(s.strip()) for s in route['Stops'].split(',')]
+            print(f"  Processing bus route {route['RouteID']}: {stops}")
+            
+            for i in range(len(stops)-1):
+                # Skip if either stop is not in valid nodes
+                if stops[i] not in self.valid_nodes or stops[i+1] not in self.valid_nodes:
+                    print(f"    Skipping edge {stops[i]} -> {stops[i+1]} (invalid nodes)")
+                    continue
+                
+                # Get coordinates for visualization
+                start_pos = self.node_positions.get(stops[i])
+                end_pos = self.node_positions.get(stops[i+1])
+                
+                if start_pos and end_pos:
+                    try:
+                        # Calculate distance using existing road network if possible
+                        distance = nx.shortest_path_length(
+                            self.base_graph,
+                            str(stops[i]),
+                            str(stops[i+1]),
+                            weight='weight'
+                        )
+                        print(f"    Added bus edge {stops[i]} -> {stops[i+1]} (distance: {distance})")
+                    except Exception as e:
+                        # If no road path exists, use direct distance
+                        distance = ((start_pos[0] - end_pos[0])**2 + 
+                                  (start_pos[1] - end_pos[1])**2)**0.5
+                        print(f"    Added bus edge {stops[i]} -> {stops[i+1]} (direct distance: {distance})")
+                    
+                    self.network.add_edge(
+                        stops[i],
+                        stops[i+1],
+                        type='bus',
+                        route=route['RouteID'],
+                        weight=distance,
+                        capacity=route['DailyPassengers']
+                    )
+        
+        # Add metro lines
+        print("\nDebug - Adding metro lines:")
+        for _, line in self.metro_lines.iterrows():
+            stations = [str(s.strip()) for s in line['Stations'].split(',')]
+            print(f"  Processing metro line {line['LineID']}: {stations}")
+            
+            for i in range(len(stations)-1):
+                # Skip if either station is not in valid nodes
+                if stations[i] not in self.valid_nodes or stations[i+1] not in self.valid_nodes:
+                    print(f"    Skipping edge {stations[i]} -> {stations[i+1]} (invalid nodes)")
+                    continue
+                
+                # Get coordinates for visualization
+                start_pos = self.node_positions.get(stations[i])
+                end_pos = self.node_positions.get(stations[i+1])
+                
+                if start_pos and end_pos:
+                    # Calculate direct distance for metro (doesn't follow roads)
+                    distance = ((start_pos[0] - end_pos[0])**2 + 
+                              (start_pos[1] - end_pos[1])**2)**0.5
+                    print(f"    Added metro edge {stations[i]} -> {stations[i+1]} (distance: {distance})")
+                    
+                    self.network.add_edge(
+                        stations[i],
+                        stations[i+1],
+                        type='metro',
+                        route=line['LineID'],
+                        weight=distance,
+                        capacity=line['DailyPassengers']
+                    )
+        
+        # Debug: Print final network nodes
+        print("\nDebug - Final Network Nodes:", list(self.network.nodes()))
+    
+    def optimize_transfer_points(self) -> List[Tuple[str, float]]:
+        """Optimize transfer points based on demand and connectivity."""
         transfer_scores = []
         
         for point in self.transfer_points:
@@ -66,30 +175,114 @@ class PublicTransitOptimizer:
             degree = self.network.degree(point)
             
             # Calculate demand score
-            demand_in = sum(self.demand_data.get((src, point), 0) for src in self.network.nodes())
-            demand_out = sum(self.demand_data.get((point, dest), 0) for dest in self.network.nodes())
+            demand_in = sum(self.demand_data.get((src, point), 0) 
+                          for src in self.network.nodes())
+            demand_out = sum(self.demand_data.get((point, dest), 0) 
+                           for dest in self.network.nodes())
             
-            # Calculate transfer efficiency (connections between different modes)
+            # Calculate transfer efficiency
             transfer_efficiency = 0
             neighbors = list(self.network.neighbors(point))
             for i in range(len(neighbors)):
                 for j in range(i+1, len(neighbors)):
-                    if self.network[point][neighbors[i]]['type'] != self.network[point][neighbors[j]]['type']:
+                    if (self.network[point][neighbors[i]].get('type') != 
+                        self.network[point][neighbors[j]].get('type')):
                         transfer_efficiency += 1
             
-            score = 0.4*(degree) + 0.3*(demand_in + demand_out)/1000 + 0.3*transfer_efficiency
+            # Calculate final score
+            score = (0.4 * degree + 
+                    0.3 * (demand_in + demand_out)/1000 + 
+                    0.3 * transfer_efficiency)
+            
             transfer_scores.append((point, score))
         
-        # Sort by score descending
         return sorted(transfer_scores, key=lambda x: x[1], reverse=True)
     
-    def optimize_resource_allocation(self, total_buses=200, total_trains=30):
-        """Optimizes vehicle allocation using modified DP approach"""
-        # Precompute route values
-        bus_values = self._compute_route_values('bus')
-        metro_values = self._compute_route_values('metro')
+    def _dp_allocate(
+        self,
+        values: List[Tuple[str, float]],
+        max_units: int,
+        min_units: int,
+        max_per_route: int
+    ) -> Dict[str, int]:
+        """Optimize resource allocation using dynamic programming."""
+        n = len(values)
+        dp = [[0] * (max_units + 1) for _ in range(n + 1)]
+        allocation = {}
+
+        # Build DP table
+        for i in range(1, n + 1):
+            route_id, value = values[i-1]
+            for u in range(max_units + 1):
+                max_possible = min(u, max_per_route)
+                for alloc in range(min_units, max_possible + 1):
+                    # Apply diminishing returns
+                    current_value = value * min(alloc, 10)
+                    if dp[i-1][u-alloc] + current_value > dp[i][u]:
+                        dp[i][u] = dp[i-1][u-alloc] + current_value
+
+        # Backtrack to find allocation
+        remaining = max_units
+        for i in range(n, 0, -1):
+            route_id, value = values[i-1]
+            for alloc in range(min(remaining, max_per_route), min_units-1, -1):
+                if dp[i][remaining] == dp[i-1][remaining-alloc] + value * min(alloc, 10):
+                    allocation[route_id] = alloc
+                    remaining -= alloc
+                    break
+            else:
+                allocation[route_id] = min_units
+                remaining -= min_units
+
+        return allocation
+    
+    def optimize_resource_allocation(
+        self,
+        total_buses: int = 200,
+        total_trains: int = 30
+    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        """Optimize allocation of buses and trains."""
+        # Calculate route values
+        bus_values = []
+        for _, route in self.bus_routes.iterrows():
+            stops = [s.strip() for s in route['Stops'].split(',')]
+            
+            # Base value from existing passengers
+            value = route['DailyPassengers']
+            
+            # Add value from demand matrix
+            for i in range(len(stops)):
+                for j in range(i+1, len(stops)):
+                    value += self.demand_data.get((stops[i], stops[j]), 0) // 2
+            
+            # Add transfer point bonus
+            transfer_bonus = sum(10000 for stop in stops 
+                               if stop in self.transfer_points)
+            value += transfer_bonus
+            
+            bus_values.append((route['RouteID'], value))
         
-        # Optimize bus allocation
+        # Calculate metro values
+        metro_values = []
+        for _, line in self.metro_lines.iterrows():
+            stations = [s.strip() for s in line['Stations'].split(',')]
+            
+            # Base value from existing passengers
+            value = line['DailyPassengers']
+            
+            # Add value from demand matrix
+            for i in range(len(stations)):
+                for j in range(i+1, len(stations)):
+                    value += self.demand_data.get((stations[i], stations[j]), 0) // 2
+            
+            # Add transfer point bonus
+            transfer_bonus = sum(10000 for station in stations 
+                               if station in self.transfer_points)
+            value += transfer_bonus
+            
+            metro_values.append((line['LineID'], value))
+        
+        # Optimize allocations
         bus_allocation = self._dp_allocate(
             values=bus_values,
             max_units=total_buses,
@@ -97,7 +290,6 @@ class PublicTransitOptimizer:
             max_per_route=25  # Maximum buses per route
         )
         
-        # Optimize metro allocation
         metro_allocation = self._dp_allocate(
             values=metro_values,
             max_units=total_trains,
@@ -107,66 +299,12 @@ class PublicTransitOptimizer:
         
         return bus_allocation, metro_allocation
     
-    def _compute_route_values(self, transport_type):
-        """Computes value scores for each route based on demand and connectivity"""
-        routes = self.bus_routes if transport_type == 'bus' else self.metro_lines
-        values = []
-        
-        for _, route in routes.iterrows():
-            stops = self._parse_stops(route['Stops'] if transport_type == 'bus' else route['Stations'])
-            
-            # Base value from existing passengers
-            value = route.get('DailyPassengers', 10000 if transport_type == 'bus' else 500000)
-            
-            # Add value from demand matrix
-            for i in range(len(stops)):
-                for j in range(i+1, len(stops)):
-                    value += self.demand_data.get((stops[i], stops[j]), 0) // 2
-            
-            # Add transfer point bonus
-            transfer_bonus = sum(10000 for stop in stops if stop in self.transfer_points)
-            value += transfer_bonus
-            
-            values.append((route['RouteID'] if transport_type == 'bus' else route['LineID'], value))
-        
-        return values
-    
-def _dp_allocate(self, values, max_units, min_units, max_per_route):
-    """Simplified DP allocation with constraints"""
-    n = len(values)
-    # dp[i][u] = max benefit for first i routes using u units
-    dp = [[0] * (max_units + 1) for _ in range(n + 1)]
-    allocation = {}
-
-    # Build DP table
-    for i in range(1, n + 1):
-        route_id, value = values[i-1]
-        for u in range(max_units + 1):
-            # Try all possible allocations for this route
-            max_possible = min(u, max_per_route)
-            for alloc in range(min_units, max_possible + 1):
-                current_value = value * min(alloc, 10)  # Diminishing returns
-                if dp[i-1][u-alloc] + current_value > dp[i][u]:
-                    dp[i][u] = dp[i-1][u-alloc] + current_value
-
-    # Backtrack to find allocation
-    remaining = max_units
-    for i in range(n, 0, -1):
-        route_id, value = values[i-1]
-        # Find the allocation that gave us this DP value
-        for alloc in range(min(remaining, max_per_route), min_units-1, -1):
-            if dp[i][remaining] == dp[i-1][remaining-alloc] + value * min(alloc, 10):
-                allocation[route_id] = alloc
-                remaining -= alloc
-                break
-        else:  # No allocation found (shouldn't happen if constraints are valid)
-            allocation[route_id] = min_units
-            remaining -= min_units
-
-    return allocation
-
-    def generate_schedules(self, bus_allocation, metro_allocation):
-        """Generates optimized schedules with transfer information"""
+    def generate_schedules(
+        self,
+        bus_allocation: Dict[str, int],
+        metro_allocation: Dict[str, int]
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """Generate optimized schedules with transfer information."""
         bus_schedules = []
         metro_schedules = []
         
@@ -174,7 +312,7 @@ def _dp_allocate(self, values, max_units, min_units, max_per_route):
         for _, route in self.bus_routes.iterrows():
             route_id = route['RouteID']
             assigned = bus_allocation.get(route_id, 5)
-            stops = self._parse_stops(route['Stops'])
+            stops = [s.strip() for s in route['Stops'].split(',')]
             
             # Find transfer points on this route
             transfers = [stop for stop in stops if stop in self.transfer_points]
@@ -192,10 +330,11 @@ def _dp_allocate(self, values, max_units, min_units, max_per_route):
         for _, line in self.metro_lines.iterrows():
             line_id = line['LineID']
             assigned = metro_allocation.get(line_id, 2)
-            stations = self._parse_stops(line['Stations'])
+            stations = [s.strip() for s in line['Stations'].split(',')]
             
             # Find transfer points on this line
-            transfers = [station for station in stations if station in self.transfer_points]
+            transfers = [station for station in stations 
+                        if station in self.transfer_points]
             
             metro_schedules.append({
                 'Line': line_id,
@@ -208,180 +347,60 @@ def _dp_allocate(self, values, max_units, min_units, max_per_route):
         
         return bus_schedules, metro_schedules
     
-    def visualize_network_map(self):
-        """Creates an interactive Folium map visualization"""
+    def create_visualization(self) -> str:
+        """Create an interactive map visualization."""
         # Create base map
-        m = folium.Map(location=[30.0444, 31.2357], zoom_start=12)  # Cairo coordinates
+        m = folium.Map(
+            location=[30.0444, 31.2357],  # Cairo coordinates
+            zoom_start=12
+        )
         
         # Add bus routes
         for _, route in self.bus_routes.iterrows():
-            stops = self._parse_stops(route['Stops'])
+            stops = [s.strip() for s in route['Stops'].split(',')]
             for i in range(len(stops)-1):
-                folium.PolyLine(
-                    locations=[[i+30.0, i+31.0] for i in range(len(stops))],  # Simplified coordinates
-                    color='blue',
-                    weight=2,
-                    opacity=0.7,
-                    popup=f"Bus Route {route['RouteID']}"
-                ).add_to(m)
+                if (stops[i] in self.node_positions and 
+                    stops[i+1] in self.node_positions):
+                    # Draw route line
+                    folium.PolyLine(
+                        locations=[
+                            self.node_positions[stops[i]],
+                            self.node_positions[stops[i+1]]
+                        ],
+                        color='blue',
+                        weight=2,
+                        opacity=0.7,
+                        popup=f"Bus Route {route['RouteID']}"
+                    ).add_to(m)
         
         # Add metro lines
         for _, line in self.metro_lines.iterrows():
-            stations = self._parse_stops(line['Stations'])
+            stations = [s.strip() for s in line['Stations'].split(',')]
             for i in range(len(stations)-1):
-                folium.PolyLine(
-                    locations=[[i+30.0, i+30.9] for i in range(len(stations))],  # Simplified coordinates
-                    color='red',
-                    weight=4,
-                    opacity=0.9,
-                    popup=f"Metro Line {line['LineID']}"
-                ).add_to(m)
+                if (stations[i] in self.node_positions and 
+                    stations[i+1] in self.node_positions):
+                    # Draw metro line
+                    folium.PolyLine(
+                        locations=[
+                            self.node_positions[stations[i]],
+                            self.node_positions[stations[i+1]]
+                        ],
+                        color='red',
+                        weight=4,
+                        opacity=0.9,
+                        popup=f"Metro Line {line['LineID']}"
+                    ).add_to(m)
         
         # Add transfer points
         for point in self.transfer_points:
-            folium.CircleMarker(
-                location=[30.0444, 31.2357],  # Simplified coordinate
-                radius=5,
-                color='green',
-                fill=True,
-                fill_color='green',
-                popup=f"Transfer Point: {point}"
-            ).add_to(m)
+            if point in self.node_positions:
+                folium.CircleMarker(
+                    location=self.node_positions[point],
+                    radius=5,
+                    color='green',
+                    fill=True,
+                    fill_color='green',
+                    popup=f"Transfer Point: {point}"
+                ).add_to(m)
         
         return m._repr_html_()
-
-def run_public_transit_optimization():
-    """Main function to run the optimization and return results for Streamlit"""
-    # Load sample data (in a real app, this would come from file uploads)
-    bus_routes = pd.DataFrame({
-        'RouteID': ['B1', 'B2', 'B3'],
-        'Stops': ['A1,B1,C1,D1', 'A2,B2,C2,D2', 'A3,B3,C3,D3'],
-        'DailyPassengers': [8000, 12000, 5000]
-    })
-    
-    metro_lines = pd.DataFrame({
-        'LineID': ['M1', 'M2'],
-        'Stations': ['A1,B1,C1', 'A2,B2,C2'],
-        'DailyPassengers': [300000, 250000]
-    })
-    
-    demand_data = pd.DataFrame({
-        'FromID': ['A1', 'B1', 'C1', 'A2', 'B2'],
-        'ToID': ['B1', 'C1', 'D1', 'B2', 'C2'],
-        'DailyPassengers': [500, 300, 200, 400, 350]
-    })
-    
-    # Clean demand data
-    demand_dict = defaultdict(int)
-    for _, row in demand_data.iterrows():
-        demand_dict[(str(row['FromID']), str(row['ToID']))] = row['DailyPassengers']
-    
-    # Create optimizer instance
-    optimizer = PublicTransitOptimizer(bus_routes, metro_lines, demand_dict)
-    
-    # Build integrated network
-    optimizer.build_integrated_network()
-    
-    # Optimize transfer points
-    transfer_points = optimizer.optimize_transfer_points()
-    
-    # Optimize resource allocation
-    bus_alloc, metro_alloc = optimizer.optimize_resource_allocation()
-    
-    # Generate schedules
-    bus_schedules, metro_schedules = optimizer.generate_schedules(bus_alloc, metro_alloc)
-    
-    # Create visualization
-    map_html = optimizer.visualize_network_map()
-    
-    # Prepare results for Streamlit
-    results = {
-        'transfer_points': transfer_points,
-        'bus_allocation': bus_alloc,
-        'metro_allocation': metro_alloc,
-        'bus_schedules': bus_schedules,
-        'metro_schedules': metro_schedules,
-        'network_visualization': map_html
-    }
-    
-    return results
-
-# Streamlit integration
-def show_public_transit_analysis():
-    st.title("Public Transit Optimization")
-    
-    with st.form("transit_optimization"):
-        st.subheader("Input Parameters")
-        col1, col2 = st.columns(2)
-        total_buses = col1.number_input("Total Available Buses", min_value=50, max_value=500, value=200)
-        total_trains = col2.number_input("Total Available Trains", min_value=10, max_value=100, value=30)
-        
-        submitted = st.form_submit_button("Run Optimization")
-    
-    if submitted:
-        with st.spinner("Optimizing public transit network..."):
-            results = run_public_transit_optimization()
-            
-            st.success("Optimization complete!")
-            
-            # Display visualization
-            st.subheader("Network Visualization")
-            st.components.v1.html(results['network_visualization'], height=500)
-            
-            # Display transfer points
-            st.subheader("Optimized Transfer Points (Ranked)")
-            transfer_df = pd.DataFrame(results['transfer_points'], columns=['Transfer Point', 'Score'])
-            st.dataframe(transfer_df.sort_values('Score', ascending=False))
-            
-            # Display resource allocation
-            st.subheader("Bus Allocation")
-            bus_df = pd.DataFrame(list(results['bus_allocation'].items()), columns=['Route', 'Buses Allocated'])
-            st.bar_chart(bus_df.set_index('Route'))
-            
-            st.subheader("Metro Allocation")
-            metro_df = pd.DataFrame(list(results['metro_allocation'].items()), columns=['Line', 'Trains Allocated'])
-            st.bar_chart(metro_df.set_index('Line'))
-            
-            # Display schedules
-            st.subheader("Optimized Bus Schedules")
-            bus_sched_df = pd.DataFrame(results['bus_schedules'])
-            st.dataframe(bus_sched_df)
-            
-            st.subheader("Optimized Metro Schedules")
-            metro_sched_df = pd.DataFrame(results['metro_schedules'])
-            st.dataframe(metro_sched_df)
-
-# Add to your existing Streamlit navigation
-if menu == "Algorithms":
-    st.title("Algorithm Selection")
-    
-    algo_type = st.selectbox("Choose Algorithm", ["Dijkstra", "A*", "Greedy", "DP", "Public Transit Optimization"])
-    
-    if algo_type == "Public Transit Optimization":
-        show_public_transit_analysis()
-    else:
-        # Your existing algorithm selection code
-        st.text_input("Source Point", "e.g., A1")
-        st.text_input("Destination Point", "e.g., D4")
-        st.selectbox("Time of Day", ["Morning Rush", "Evening", "Night"])
-        st.checkbox("Simulate Road Closure")
-        st.checkbox("Enable Emergency Mode")
-
-        if st.button("Run Algorithm"):
-            st.success("Algorithm executed!")
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Travel Time", "15 min")
-            col2.metric("Cost", "EGP 25")
-            col3.metric("Coverage", "98%")
-
-            st.subheader("Network Visualization")
-            st.info("[Mock Graph Placeholder]")
-
-            st.subheader("Result Table")
-            st.table(pd.DataFrame({
-                "Step": [1, 2, 3, 4],
-                "Node": ["A1", "B2", "C3", "D4"],
-                "Action": ["Start", "Move", "Move", "Arrive"],
-                "Cost": [0, 5, 10, 15]
-            }))
