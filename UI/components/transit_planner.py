@@ -37,6 +37,21 @@ def render_route_details(route_results: Dict[str, Any]) -> None:
 
 def render_route_planner(controller, neighborhoods, facilities) -> None:
     """Render the route planning interface."""
+    st.write("### Public Transit Route Planner")
+    
+    # Debug section
+    if st.checkbox("Show Debug Information", value=False):
+        with st.expander("Transit Network Status"):
+            # Show available transit data
+            st.write("Bus Routes:")
+            st.dataframe(controller.bus_routes if not controller.bus_routes.empty else "No bus routes available")
+            
+            st.write("Metro Lines:")
+            st.dataframe(controller.metro_lines if not controller.metro_lines.empty else "No metro lines available")
+            
+            st.write("Transfer Points:")
+            st.write(list(controller.transfer_points) if controller.transfer_points else "No transfer points found")
+    
     col1, col2 = st.columns(2)
     
     # Get neighborhood names
@@ -46,15 +61,15 @@ def render_route_planner(controller, neighborhoods, facilities) -> None:
     source = col1.selectbox(
         "Starting Point",
         options=list(neighborhood_names.keys()),
-        format_func=lambda x: neighborhood_names[x],
+        format_func=lambda x: f"{x} - {neighborhood_names[x]}",
         key="transit_source"
     )
     
-    # Destination selection (now only neighborhoods)
+    # Destination selection
     dest = col2.selectbox(
         "Destination",
         options=list(neighborhood_names.keys()),
-        format_func=lambda x: neighborhood_names[x],
+        format_func=lambda x: f"{x} - {neighborhood_names[x]}",
         key="transit_dest"
     )
     
@@ -73,7 +88,13 @@ def render_route_planner(controller, neighborhoods, facilities) -> None:
     if st.button("Find Route", key="find_transit_route"):
         with st.spinner("Finding optimal public transit route..."):
             try:
+                # Show selected locations
+                st.write("Selected Route:")
+                st.write(f"From: {source} - {neighborhood_names[source]}")
+                st.write(f"To: {dest} - {neighborhood_names[dest]}")
+                
                 # Get current schedules from DP optimization
+                st.write("Optimizing transit schedules...")
                 schedule_results = controller.run_algorithm(
                     algorithm="DP",
                     source=None,
@@ -83,6 +104,13 @@ def render_route_planner(controller, neighborhoods, facilities) -> None:
                     total_trains=30
                 )
                 
+                if not schedule_results or "results" not in schedule_results:
+                    st.error("Failed to generate transit schedules.")
+                    if st.checkbox("Show Schedule Debug Info"):
+                        st.write("Schedule Results:", schedule_results)
+                    return
+                
+                st.write("Finding route with optimized schedules...")
                 # Find route using schedules
                 route_results = controller.find_transit_route(
                     source=source,
@@ -97,4 +125,19 @@ def render_route_planner(controller, neighborhoods, facilities) -> None:
                     render_route_details(route_results)
             
             except Exception as e:
-                st.error(f"An error occurred: {str(e)}") 
+                st.error(f"An error occurred: {str(e)}")
+                # Show detailed error information
+                if st.checkbox("Show Error Details"):
+                    st.error("Detailed Error Information:")
+                    st.write("Source Location:", source)
+                    st.write("Destination:", dest)
+                    st.write("Time of Day:", time_of_day)
+                    st.write("Preferences:", {
+                        "prefer_metro": prefer_metro,
+                        "minimize_transfers": minimize_transfers
+                    })
+                    # Show transit data status
+                    st.write("Transit Data Status:")
+                    st.write("- Bus Routes Available:", not controller.bus_routes.empty)
+                    st.write("- Metro Lines Available:", not controller.metro_lines.empty)
+                    st.write("- Number of Transfer Points:", len(controller.transfer_points)) 

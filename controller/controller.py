@@ -214,52 +214,121 @@ class TransportationController:
         **kwargs
     ) -> Dict[str, Any]:
         """Run the specified algorithm and return results."""
-        if algorithm == "MST":
-            algo_name = kwargs.get("mst_algorithm", "Prim")
-            visualization, results = run_mst(source, dest, time_of_day, scenario, algo_name)
-            return {
-                "visualization": visualization,
-                "results": results,
-                "type": "network"
-            }
+        try:
+            if algorithm == "MST":
+                algo_name = kwargs.get("mst_algorithm", "Prim")
+                visualization, results = run_mst(source, dest, time_of_day, scenario, algo_name)
+                return {
+                    "visualization": visualization,
+                    "results": results,
+                    "type": "network"
+                }
+                
+            elif algorithm == "Dijkstra":
+                avoid_congestion = kwargs.get("avoid_congestion", False)
+                visualization, results = run_time_dijkstra(
+                    source, dest, time_of_day, scenario, avoid_congestion
+                )
+                
+                # Add path analysis if path exists
+                if results["path"]:
+                    results["analysis"] = self.analyze_path(results["path"], time_of_day)
+                
+                return {
+                    "visualization": visualization,
+                    "results": results,
+                    "type": "path"
+                }
+                
+            elif algorithm == "A*":
+                hospitals = self.facilities[self.facilities["Type"].str.lower() == "medical"]
+                visualization, results = run_emergency_routing(source)
+                
+                # Add path analysis if path exists
+                if "path" in results and results["path"]:
+                    results["analysis"] = self.analyze_path(results["path"], time_of_day)
+                
+                return {
+                    "visualization": visualization,
+                    "results": results,
+                    "type": "emergency"
+                }
             
-        elif algorithm == "Dijkstra":
-            avoid_congestion = kwargs.get("avoid_congestion", False)
-            visualization, results = run_time_dijkstra(
-                source, dest, time_of_day, scenario, avoid_congestion
-            )
+            elif algorithm == "DP":
+                try:
+                    st.write("Initializing transit optimization...")
+                    # Verify transit data is available
+                    if self.bus_routes.empty or self.metro_lines.empty:
+                        raise ValueError("Transit data not available. Please check bus_routes.csv and metro_lines.csv.")
+
+                    # Show transit data status
+                    st.write("Transit Data Status:")
+                    st.write(f"Bus Routes: {len(self.bus_routes)} routes")
+                    st.write(f"Metro Lines: {len(self.metro_lines)} lines")
+                    st.write(f"Transfer Points: {len(self.transfer_points)} points")
+
+                    total_buses = kwargs.get("total_buses", 200)
+                    total_trains = kwargs.get("total_trains", 30)
+                    
+                    # Create optimizer instance
+                    st.write("Creating transit optimizer...")
+                    optimizer = PublicTransitOptimizer()
+                    
+                    # Build network
+                    st.write("Building integrated network...")
+                    optimizer.build_integrated_network()
+                    
+                    # Run optimization
+                    st.write("Running schedule optimization...")
+                    transfer_points = optimizer.optimize_transfer_points()
+                    bus_alloc, metro_alloc = optimizer.optimize_resource_allocation(
+                        total_buses=total_buses,
+                        total_trains=total_trains
+                    )
+                    
+                    # Generate schedules
+                    st.write("Generating transit schedules...")
+                    bus_schedules, metro_schedules = optimizer.generate_schedules(bus_alloc, metro_alloc)
+                    
+                    # Create visualization
+                    st.write("Creating network visualization...")
+                    map_html = optimizer.create_visualization()
+                    
+                    # Return comprehensive results
+                    return {
+                        "visualization": map_html,
+                        "results": {
+                            "transfer_points": transfer_points,
+                            "bus_allocation": bus_alloc,
+                            "metro_allocation": metro_alloc,
+                            "bus_schedules": bus_schedules,
+                            "metro_schedules": metro_schedules,
+                            "metrics": {
+                                "total_buses_allocated": sum(bus_alloc.values()),
+                                "total_trains_allocated": sum(metro_alloc.values()),
+                                "num_transfer_points": len(transfer_points),
+                                "total_daily_capacity": sum(s['Daily Capacity'] for s in bus_schedules + metro_schedules)
+                            }
+                        },
+                        "type": "schedule"
+                    }
+                except Exception as e:
+                    st.error(f"Error in transit optimization: {str(e)}")
+                    # Show detailed error information
+                    if st.checkbox("Show Optimization Error Details"):
+                        st.error("Transit Optimization Error Details:")
+                        st.write("Bus Routes Shape:", self.bus_routes.shape if not self.bus_routes.empty else "No bus routes")
+                        st.write("Metro Lines Shape:", self.metro_lines.shape if not self.metro_lines.empty else "No metro lines")
+                        st.write("Transfer Points:", list(self.transfer_points))
+                        st.write("Error:", str(e))
+                    raise
             
-            # Add path analysis if path exists
-            if results["path"]:
-                results["analysis"] = self.analyze_path(results["path"], time_of_day)
-            
-            return {
-                "visualization": visualization,
-                "results": results,
-                "type": "path"
-            }
-            
-        elif algorithm == "A*":
-            hospitals = self.facilities[self.facilities["Type"].str.lower() == "medical"]
-            visualization, results = run_emergency_routing(source)
-            
-            # Add path analysis if path exists
-            if "path" in results and results["path"]:
-                results["analysis"] = self.analyze_path(results["path"], time_of_day)
-            
-            return {
-                "visualization": visualization,
-                "results": results,
-                "type": "emergency"
-            }
-        
-        elif algorithm == "DP":
-            total_buses = kwargs.get("total_buses", 200)
-            total_trains = kwargs.get("total_trains", 30)
-            return self.run_dp_scheduling(total_buses, total_trains)
-        
-        else:
-            raise ValueError(f"Unknown algorithm: {algorithm}")
+            else:
+                raise ValueError(f"Unknown algorithm: {algorithm}")
+                
+        except Exception as e:
+            st.error(f"Algorithm error: {str(e)}")
+            raise
     
     def display_results(self, results: Dict[str, Any]):
         """
