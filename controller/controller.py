@@ -387,19 +387,24 @@ class TransportationController:
     ) -> Dict[str, Any]:
         """Find optimal public transit route between two points."""
         try:
+            # Convert IDs to strings and strip whitespace
+            source = str(source).strip()
+            destination = str(destination).strip()
+
+            # Debug information
+            st.write("Debug Info:")
+            st.write(f"Source: {source} ({self.get_location_name(source)})")
+            st.write(f"Destination: {destination} ({self.get_location_name(destination)})")
+
             # Validate input data
             if self.bus_routes.empty or self.metro_lines.empty:
                 raise ValueError("Transit data not available. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
             
-            # Convert IDs to strings and strip whitespace
-            source = str(source).strip()
-            destination = str(destination).strip()
-            
             if source not in self.node_positions:
-                raise ValueError(f"Source location '{source}' not found in the network.")
+                raise ValueError(f"Source location '{source}' ({self.get_location_name(source)}) not found in the network.")
             
             if destination not in self.node_positions:
-                raise ValueError(f"Destination location '{destination}' not found in the network.")
+                raise ValueError(f"Destination location '{destination}' ({self.get_location_name(destination)}) not found in the network.")
 
             # Create a specialized graph for transit routing
             transit_graph = nx.MultiGraph()
@@ -411,17 +416,20 @@ class TransportationController:
                 for _, route in self.bus_routes.iterrows():
                     try:
                         stops = [str(s).strip() for s in route["Stops"].split(",")]
-                        # Validate all stops exist
+                        valid_stops = []
                         for stop in stops:
                             if stop not in self.node_positions:
                                 st.warning(f"Bus route {route['RouteID']}: Stop {stop} not found in network")
-                                continue
-                        bus_schedules.append({
-                            "Route": route["RouteID"],
-                            "Stops": stops,
-                            "Interval (min)": 15,  # Default interval
-                            "Transfer Points": list(self.transfer_points)
-                        })
+                            else:
+                                valid_stops.append(stop)
+                        
+                        if len(valid_stops) >= 2:
+                            bus_schedules.append({
+                                "Route": route["RouteID"],
+                                "Stops": valid_stops,
+                                "Interval (min)": 15,  # Default interval
+                                "Transfer Points": list(self.transfer_points)
+                            })
                     except Exception as e:
                         st.warning(f"Error processing bus route {route['RouteID']}: {str(e)}")
                         continue
@@ -431,17 +439,20 @@ class TransportationController:
                 for _, line in self.metro_lines.iterrows():
                     try:
                         stations = [str(s).strip() for s in line["Stations"].split(",")]
-                        # Validate all stations exist
+                        valid_stations = []
                         for station in stations:
                             if station not in self.node_positions:
                                 st.warning(f"Metro line {line['LineID']}: Station {station} not found in network")
-                                continue
-                        metro_schedules.append({
-                            "Line": line["LineID"],
-                            "Stations": stations,
-                            "Interval (min)": 10,  # Default interval
-                            "Transfer Points": list(self.transfer_points)
-                        })
+                            else:
+                                valid_stations.append(station)
+                        
+                        if len(valid_stations) >= 2:
+                            metro_schedules.append({
+                                "Line": line["LineID"],
+                                "Stations": valid_stations,
+                                "Interval (min)": 10,  # Default interval
+                                "Transfer Points": list(self.transfer_points)
+                            })
                     except Exception as e:
                         st.warning(f"Error processing metro line {line['LineID']}: {str(e)}")
                         continue
@@ -450,6 +461,11 @@ class TransportationController:
                     "bus_schedules": bus_schedules,
                     "metro_schedules": metro_schedules
                 }
+
+            # Debug information
+            st.write("Available Routes:")
+            st.write("Bus Routes:", [f"{route['Route']}: {' → '.join(route['Stops'])}" for route in schedules["bus_schedules"]])
+            st.write("Metro Lines:", [f"{line['Line']}: {' → '.join(line['Stations'])}" for line in schedules["metro_schedules"]])
 
             # Add bus routes to transit graph
             for route in schedules["bus_schedules"]:
@@ -507,9 +523,35 @@ class TransportationController:
                         st.warning(f"Error adding metro line segment {line['Line']} ({stations[i]} → {stations[i + 1]}): {str(e)}")
                         continue
 
-            # Check if a path exists between source and destination
+            # Debug information about graph
+            st.write("Graph Information:")
+            st.write(f"Number of nodes: {len(transit_graph.nodes())}")
+            st.write(f"Number of edges: {len(transit_graph.edges())}")
+            st.write(f"Source node in graph: {source in transit_graph.nodes()}")
+            st.write(f"Destination node in graph: {destination in transit_graph.nodes()}")
+
+            # Check if source and destination are in the same connected component
             if not nx.has_path(transit_graph, source, destination):
-                raise ValueError(f"No transit route found between {self.get_location_name(source)} and {self.get_location_name(destination)}")
+                # Find connected components
+                components = list(nx.connected_components(transit_graph))
+                source_component = None
+                dest_component = None
+                
+                for i, component in enumerate(components):
+                    if source in component:
+                        source_component = i
+                    if destination in component:
+                        dest_component = i
+                
+                error_msg = f"No transit route found between {self.get_location_name(source)} and {self.get_location_name(destination)}. "
+                if source_component is None:
+                    error_msg += f"Source location ({self.get_location_name(source)}) is not connected to any transit routes."
+                elif dest_component is None:
+                    error_msg += f"Destination location ({self.get_location_name(destination)}) is not connected to any transit routes."
+                else:
+                    error_msg += "These locations are in different disconnected parts of the transit network."
+                
+                raise ValueError(error_msg)
 
             # Find shortest path considering preferences
             def edge_weight(u, v, data):
