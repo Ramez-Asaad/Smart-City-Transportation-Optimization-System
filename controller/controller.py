@@ -11,6 +11,7 @@ from collections import defaultdict
 from algorithms.dp_schedule import PublicTransitOptimizer
 import networkx as nx
 import os
+from pathlib import Path
 
 class TransportationController:
     def __init__(self):
@@ -37,10 +38,12 @@ class TransportationController:
 
         # Load transit data
         try:
-            bus_routes_path = os.path.join('data', 'bus_routes.csv')
-            metro_lines_path = os.path.join('data', 'metro_lines.csv')
+            current_dir = Path(__file__).parent.parent
+            data_dir = current_dir / "data"
+            bus_routes_path = data_dir / "bus_routes.csv"
+            metro_lines_path = data_dir / "metro_lines.csv"
             
-            if os.path.exists(bus_routes_path) and os.path.exists(metro_lines_path):
+            if bus_routes_path.exists() and metro_lines_path.exists():
                 self.bus_routes = pd.read_csv(bus_routes_path)
                 self.metro_lines = pd.read_csv(metro_lines_path)
                 
@@ -51,24 +54,24 @@ class TransportationController:
                 
                 # Collect all bus stops
                 for _, route in self.bus_routes.iterrows():
-                    stops = [s.strip() for s in route['Stops'].split(',')]
+                    stops = [str(s).strip() for s in route['Stops'].split(',')]
                     bus_stops.update(stops)
                 
                 # Collect all metro stations
                 for _, line in self.metro_lines.iterrows():
-                    stations = [s.strip() for s in line['Stations'].split(',')]
+                    stations = [str(s).strip() for s in line['Stations'].split(',')]
                     metro_stations.update(stations)
                 
                 # Find intersections
                 self.transfer_points = bus_stops.intersection(metro_stations)
             else:
-                print("Warning: Transit data files not found")
+                st.error("Transit data files not found. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
                 self.bus_routes = pd.DataFrame()
                 self.metro_lines = pd.DataFrame()
                 self.transfer_points = set()
                 
         except Exception as e:
-            print(f"Warning: Could not load transit data: {str(e)}")
+            st.error(f"Could not load transit data: {str(e)}")
             # Initialize with empty data if files not found
             self.bus_routes = pd.DataFrame()
             self.metro_lines = pd.DataFrame()
@@ -411,9 +414,42 @@ class TransportationController:
     ) -> Dict[str, Any]:
         """Find optimal public transit route between two points."""
         try:
+            # Validate input data
+            if self.bus_routes.empty or self.metro_lines.empty:
+                raise ValueError("Transit data not available. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
+            
+            if source not in self.node_positions:
+                raise ValueError(f"Source location '{source}' not found in the network.")
+            
+            if destination not in self.node_positions:
+                raise ValueError(f"Destination location '{destination}' not found in the network.")
+
             # Create a specialized graph for transit routing
             transit_graph = nx.MultiGraph()
             
+            # Initialize schedules if not provided
+            if schedules is None:
+                schedules = {
+                    "bus_schedules": [
+                        {
+                            "Route": route["RouteID"],
+                            "Stops": [str(s).strip() for s in route["Stops"].split(",")],
+                            "Interval (min)": 15,  # Default interval
+                            "Transfer Points": self.transfer_points
+                        }
+                        for _, route in self.bus_routes.iterrows()
+                    ],
+                    "metro_schedules": [
+                        {
+                            "Line": line["LineID"],
+                            "Stations": [str(s).strip() for s in line["Stations"].split(",")],
+                            "Interval (min)": 10,  # Default interval
+                            "Transfer Points": self.transfer_points
+                        }
+                        for _, line in self.metro_lines.iterrows()
+                    ]
+                }
+
             # Add bus routes
             bus_schedules = schedules.get("bus_schedules", [])
             for route in bus_schedules:
