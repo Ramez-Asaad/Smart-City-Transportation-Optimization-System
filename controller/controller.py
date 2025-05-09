@@ -418,6 +418,10 @@ class TransportationController:
             if self.bus_routes.empty or self.metro_lines.empty:
                 raise ValueError("Transit data not available. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
             
+            # Convert IDs to strings and strip whitespace
+            source = str(source).strip()
+            destination = str(destination).strip()
+            
             if source not in self.node_positions:
                 raise ValueError(f"Source location '{source}' not found in the network.")
             
@@ -429,75 +433,111 @@ class TransportationController:
             
             # Initialize schedules if not provided
             if schedules is None:
-                schedules = {
-                    "bus_schedules": [
-                        {
+                # Process bus routes
+                bus_schedules = []
+                for _, route in self.bus_routes.iterrows():
+                    try:
+                        stops = [str(s).strip() for s in route["Stops"].split(",")]
+                        # Validate all stops exist
+                        for stop in stops:
+                            if stop not in self.node_positions:
+                                st.warning(f"Bus route {route['RouteID']}: Stop {stop} not found in network")
+                                continue
+                        bus_schedules.append({
                             "Route": route["RouteID"],
-                            "Stops": [str(s).strip() for s in route["Stops"].split(",")],
+                            "Stops": stops,
                             "Interval (min)": 15,  # Default interval
-                            "Transfer Points": self.transfer_points
-                        }
-                        for _, route in self.bus_routes.iterrows()
-                    ],
-                    "metro_schedules": [
-                        {
+                            "Transfer Points": list(self.transfer_points)
+                        })
+                    except Exception as e:
+                        st.warning(f"Error processing bus route {route['RouteID']}: {str(e)}")
+                        continue
+
+                # Process metro lines
+                metro_schedules = []
+                for _, line in self.metro_lines.iterrows():
+                    try:
+                        stations = [str(s).strip() for s in line["Stations"].split(",")]
+                        # Validate all stations exist
+                        for station in stations:
+                            if station not in self.node_positions:
+                                st.warning(f"Metro line {line['LineID']}: Station {station} not found in network")
+                                continue
+                        metro_schedules.append({
                             "Line": line["LineID"],
-                            "Stations": [str(s).strip() for s in line["Stations"].split(",")],
+                            "Stations": stations,
                             "Interval (min)": 10,  # Default interval
-                            "Transfer Points": self.transfer_points
-                        }
-                        for _, line in self.metro_lines.iterrows()
-                    ]
+                            "Transfer Points": list(self.transfer_points)
+                        })
+                    except Exception as e:
+                        st.warning(f"Error processing metro line {line['LineID']}: {str(e)}")
+                        continue
+
+                schedules = {
+                    "bus_schedules": bus_schedules,
+                    "metro_schedules": metro_schedules
                 }
 
-            # Add bus routes
-            bus_schedules = schedules.get("bus_schedules", [])
-            for route in bus_schedules:
+            # Add bus routes to transit graph
+            for route in schedules["bus_schedules"]:
                 stops = route["Stops"]
                 for i in range(len(stops) - 1):
                     try:
+                        # Validate both stops exist
+                        if stops[i] not in self.node_positions or stops[i + 1] not in self.node_positions:
+                            continue
+
                         # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stops[i]]
                         end_pos = self.node_positions[stops[i + 1]]
                         distance = ((start_pos[0] - end_pos[0])**2 + 
                                   (start_pos[1] - end_pos[1])**2)**0.5 * 100
                         travel_time = max(5, (distance / 30) * 60)  # Minimum 5 minutes between stops
-                    except Exception:
-                        travel_time = 15  # Default time if coordinates not found
-                    
-                    edge_data = {
-                        "type": "bus",
-                        "route_id": route["Route"],
-                        "interval": float(route["Interval (min)"]),
-                        "travel_time": float(travel_time),
-                        "transfer_points": route["Transfer Points"]
-                    }
-                    transit_graph.add_edge(stops[i], stops[i + 1], **edge_data)
-            
-            # Add metro lines
-            metro_schedules = schedules.get("metro_schedules", [])
-            for line in metro_schedules:
+
+                        edge_data = {
+                            "type": "bus",
+                            "route_id": route["Route"],
+                            "interval": float(route["Interval (min)"]),
+                            "travel_time": float(travel_time),
+                            "transfer_points": route["Transfer Points"]
+                        }
+                        transit_graph.add_edge(stops[i], stops[i + 1], **edge_data)
+                    except Exception as e:
+                        st.warning(f"Error adding bus route segment {route['Route']} ({stops[i]} → {stops[i + 1]}): {str(e)}")
+                        continue
+
+            # Add metro lines to transit graph
+            for line in schedules["metro_schedules"]:
                 stations = line["Stations"]
                 for i in range(len(stations) - 1):
                     try:
+                        # Validate both stations exist
+                        if stations[i] not in self.node_positions or stations[i + 1] not in self.node_positions:
+                            continue
+
                         # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stations[i]]
                         end_pos = self.node_positions[stations[i + 1]]
                         distance = ((start_pos[0] - end_pos[0])**2 + 
                                   (start_pos[1] - end_pos[1])**2)**0.5 * 100
                         travel_time = max(3, (distance / 60) * 60)  # Minimum 3 minutes between stations
-                    except Exception:
-                        travel_time = 10  # Default time if coordinates not found
-                    
-                    edge_data = {
-                        "type": "metro",
-                        "route_id": line["Line"],
-                        "interval": float(line["Interval (min)"]),
-                        "travel_time": float(travel_time),
-                        "transfer_points": line["Transfer Points"]
-                    }
-                    transit_graph.add_edge(stations[i], stations[i + 1], **edge_data)
-            
+
+                        edge_data = {
+                            "type": "metro",
+                            "route_id": line["Line"],
+                            "interval": float(line["Interval (min)"]),
+                            "travel_time": float(travel_time),
+                            "transfer_points": line["Transfer Points"]
+                        }
+                        transit_graph.add_edge(stations[i], stations[i + 1], **edge_data)
+                    except Exception as e:
+                        st.warning(f"Error adding metro line segment {line['Line']} ({stations[i]} → {stations[i + 1]}): {str(e)}")
+                        continue
+
+            # Check if a path exists between source and destination
+            if not nx.has_path(transit_graph, source, destination):
+                raise ValueError(f"No transit route found between {self.get_location_name(source)} and {self.get_location_name(destination)}")
+
             # Find shortest path considering preferences
             def edge_weight(u, v, data):
                 base_time = float(data[0]["travel_time"]) + float(data[0]["interval"]) / 2
@@ -506,7 +546,7 @@ class TransportationController:
                 if minimize_transfers and u in data[0]["transfer_points"]:
                     base_time += 10  # Transfer time penalty
                 return base_time
-            
+
             path = nx.shortest_path(
                 transit_graph,
                 source,
