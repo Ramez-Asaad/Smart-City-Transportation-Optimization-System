@@ -456,6 +456,16 @@ class TransportationController:
     ) -> Dict[str, Any]:
         """Find optimal public transit route between two points."""
         try:
+            # Create base map first to ensure it works
+            try:
+                m = folium.Map(
+                    location=[30.0444, 31.2357],  # Cairo coordinates
+                    zoom_start=12
+                )
+            except Exception as e:
+                st.error(f"Error creating base map: {str(e)}")
+                raise ValueError("Failed to create map visualization")
+
             # Convert IDs to strings and strip whitespace
             source = str(source).strip()
             destination = str(destination).strip()
@@ -668,6 +678,142 @@ class TransportationController:
                 weight=edge_weight
             )
             
+            # After finding the path, create the visualization
+            try:
+                # Add Font Awesome for icons
+                m.get_root().header.add_child(folium.Element("""
+                    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+                """))
+
+                # Create icons
+                bus_icon = folium.DivIcon(
+                    html='<div style="font-size: 18px; color: blue;"><i class="fa fa-bus"></i></div>',
+                    icon_size=(30, 30),
+                    icon_anchor=(15, 15)
+                )
+
+                metro_icon = folium.DivIcon(
+                    html='<div style="font-size: 18px; color: red;"><i class="fa fa-subway"></i></div>',
+                    icon_size=(30, 30),
+                    icon_anchor=(15, 15)
+                )
+
+                # Track added stops to avoid duplicates
+                added_stops = set()
+
+                # Draw route segments
+                for i in range(len(path) - 1):
+                    try:
+                        edge_data = transit_graph[path[i]][path[i + 1]][0]
+                        color = "red" if edge_data["type"] == "metro" else "blue"
+                        
+                        # Get coordinates for both stops
+                        start_coords = self.node_positions.get(path[i])
+                        end_coords = self.node_positions.get(path[i + 1])
+                        
+                        if not start_coords or not end_coords:
+                            st.warning(f"Missing coordinates for segment {path[i]} → {path[i + 1]}")
+                            continue
+
+                        # Draw route line
+                        folium.PolyLine(
+                            locations=[start_coords, end_coords],
+                            color=color,
+                            weight=4,
+                            opacity=0.8,
+                            popup=f"{edge_data['type'].title()} {edge_data['route_id']}"
+                        ).add_to(m)
+
+                        # Add stop markers
+                        for node_id, coords in [(path[i], start_coords), (path[i + 1], end_coords)]:
+                            if node_id not in added_stops:
+                                # Determine if this is a transfer point
+                                is_transfer = node_id in self.transfer_points
+                                
+                                # Get transport type
+                                icon = metro_icon if edge_data["type"] == "metro" else bus_icon
+                                color = "red" if edge_data["type"] == "metro" else "blue"
+                                
+                                # Create popup content
+                                popup_content = f"""
+                                <div style="width: 200px;">
+                                    <b>{self.get_location_name(node_id)}</b><br>
+                                    {edge_data['type'].title()} Stop<br>
+                                    {'Transfer Point<br>' if is_transfer else ''}
+                                    Next departure: {edge_data['interval']:.0f} min
+                                </div>
+                                """
+                                
+                                # Add markers
+                                folium.Marker(
+                                    location=coords,
+                                    icon=icon,
+                                    popup=folium.Popup(popup_content, max_width=300)
+                                ).add_to(m)
+                                
+                                if is_transfer:
+                                    folium.CircleMarker(
+                                        location=coords,
+                                        radius=12,
+                                        color="green",
+                                        fill=True,
+                                        fill_opacity=0.3,
+                                        weight=2,
+                                        popup="Transfer Point"
+                                    ).add_to(m)
+                                else:
+                                    folium.CircleMarker(
+                                        location=coords,
+                                        radius=8,
+                                        color=color,
+                                        fill=True,
+                                        fill_opacity=0.3,
+                                        weight=2
+                                    ).add_to(m)
+                                
+                                added_stops.add(node_id)
+                    except Exception as e:
+                        st.warning(f"Error drawing route segment: {str(e)}")
+                        continue
+
+                # Add legend
+                legend_html = """
+                <div style="position: fixed; 
+                            bottom: 50px; right: 50px; width: 180px; 
+                            border:2px solid grey; z-index:9999; font-size:14px;
+                            background-color:white;
+                            padding: 10px;
+                            border-radius: 5px;">
+                    <p style="margin-bottom: 10px;"><strong>Route Legend</strong></p>
+                    <div style="margin-bottom: 5px;">
+                        <i class="fa fa-bus" style="color:blue;"></i> Bus Stop
+                    </div>
+                    <div style="margin-bottom: 5px;">
+                        <i class="fa fa-subway" style="color:red;"></i> Metro Station
+                    </div>
+                    <div style="margin-bottom: 5px;">
+                        <hr style="border: 2px solid blue; display: inline-block; width: 30px; margin-right: 5px;">
+                        Bus Route
+                    </div>
+                    <div style="margin-bottom: 5px;">
+                        <hr style="border: 2px solid red; display: inline-block; width: 30px; margin-right: 5px;">
+                        Metro Line
+                    </div>
+                    <div>
+                        <i class="fa fa-circle" style="color:green;"></i> Transfer Point
+                    </div>
+                </div>
+                """
+                m.get_root().html.add_child(folium.Element(legend_html))
+
+            except Exception as e:
+                st.error(f"Error creating route visualization: {str(e)}")
+                # Return a simple map if visualization fails
+                m = folium.Map(
+                    location=[30.0444, 31.2357],  # Cairo coordinates
+                    zoom_start=12
+                )
+
             # Calculate route details
             total_travel_time = 0
             total_waiting_time = 0
@@ -715,147 +861,12 @@ class TransportationController:
                     "summary": f"{edge_data['type'].title()} {edge_data['route_id']}: {self.get_location_name(path[i])} → {self.get_location_name(path[i + 1])}"
                 }
                 
-                if path[i] in edge_data["transfer_points"]:
+                if path[i] in self.transfer_points:
                     step["transfer_info"] = "Transfer point - Follow signs to your next line"
                     step["summary"] = f"🔄 Transfer: {step['summary']}"
                 
                 steps.append(step)
-            
-            # Create visualization
-            m = folium.Map(
-                location=[30.0444, 31.2357],  # Cairo coordinates
-                zoom_start=12
-            )
 
-            # Add Font Awesome
-            m.get_root().header.add_child(folium.Element("""
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
-            """))
-
-            # Create icons
-            bus_icon = folium.DivIcon(
-                html='<div style="font-size: 18px; color: blue;"><i class="fa fa-bus"></i></div>',
-                icon_size=(30, 30),
-                icon_anchor=(15, 15)
-            )
-
-            metro_icon = folium.DivIcon(
-                html='<div style="font-size: 18px; color: red;"><i class="fa fa-subway"></i></div>',
-                icon_size=(30, 30),
-                icon_anchor=(15, 15)
-            )
-
-            # Track added stops
-            added_stops = set()
-
-            # Draw route segments
-            for i in range(len(path) - 1):
-                edge_data = transit_graph[path[i]][path[i + 1]][0]
-                color = "red" if edge_data["type"] == "metro" else "blue"
-                
-                # Draw route line
-                folium.PolyLine(
-                    locations=[self.node_positions[path[i]], self.node_positions[path[i + 1]]],
-                    color=color,
-                    weight=4,
-                    opacity=0.8,
-                    popup=f"{edge_data['type'].title()} {edge_data['route_id']}"
-                ).add_to(m)
-
-                # Add stop markers
-                for node_id in [path[i], path[i + 1]]:
-                    if node_id not in added_stops:
-                        coords = self.node_positions[node_id]
-                        
-                        # Determine if this is a transfer point
-                        is_transfer = False
-                        if i > 0 and i < len(path) - 1:
-                            prev_type = transit_graph[path[i-1]][path[i]][0]["type"]
-                            next_type = transit_graph[path[i]][path[i+1]][0]["type"]
-                            is_transfer = prev_type != next_type
-                        
-                        # Get transport type
-                        if i < len(path) - 1:
-                            edge_data = transit_graph[node_id][path[i + 1]][0]
-                        else:
-                            edge_data = transit_graph[path[i-1]][node_id][0]
-                        
-                        # Choose icon and color
-                        icon = metro_icon if edge_data["type"] == "metro" else bus_icon
-                        color = "red" if edge_data["type"] == "metro" else "blue"
-                        
-                        # Create popup
-                        popup_content = f"""
-                        <div style="width: 200px;">
-                            <b>{self.get_location_name(node_id)}</b><br>
-                            {edge_data['type'].title()} Stop<br>
-                            Line: {edge_data['route_id']}<br>
-                            {'Transfer Point<br>' if is_transfer else ''}
-                            Next departure: {edge_data['interval']:.0f} min
-                        </div>
-                        """
-                        
-                        # Add markers
-                        folium.Marker(
-                            location=coords,
-                            icon=icon,
-                            popup=folium.Popup(popup_content, max_width=300)
-                        ).add_to(m)
-                        
-                        folium.CircleMarker(
-                            location=coords,
-                            radius=10,
-                            color=color,
-                            fill=True,
-                            fill_opacity=0.3,
-                            weight=2
-                        ).add_to(m)
-                        
-                        added_stops.add(node_id)
-
-            # Add destination marker
-            final_coords = self.node_positions[path[-1]]
-            folium.CircleMarker(
-                location=final_coords,
-                radius=12,
-                color="green",
-                fill=True,
-                fill_opacity=0.5,
-                weight=3,
-                popup="Destination: " + self.get_location_name(path[-1])
-            ).add_to(m)
-
-            # Add legend
-            legend_html = """
-            <div style="position: fixed; 
-                        bottom: 50px; right: 50px; width: 180px; 
-                        border:2px solid grey; z-index:9999; font-size:14px;
-                        background-color:white;
-                        padding: 10px;
-                        border-radius: 5px;
-                        ">
-                <p style="margin-bottom: 10px;"><strong>Route Legend</strong></p>
-                <div style="margin-bottom: 5px;">
-                    <i class="fa fa-bus" style="color:blue;"></i> Bus Stop
-                </div>
-                <div style="margin-bottom: 5px;">
-                    <i class="fa fa-subway" style="color:red;"></i> Metro Station
-                </div>
-                <div style="margin-bottom: 5px;">
-                    <hr style="border: 2px solid blue; display: inline-block; width: 30px; margin-right: 5px;">
-                    Bus Route
-                </div>
-                <div style="margin-bottom: 5px;">
-                    <hr style="border: 2px solid red; display: inline-block; width: 30px; margin-right: 5px;">
-                    Metro Line
-                </div>
-                <div>
-                    <i class="fa fa-circle" style="color:green;"></i> Destination
-                </div>
-            </div>
-            """
-            m.get_root().html.add_child(folium.Element(legend_html))
-            
             return {
                 "visualization": m._repr_html_(),
                 "total_travel_time": total_travel_time,
@@ -866,9 +877,10 @@ class TransportationController:
                 "total_cost": (total_travel_time + total_waiting_time) * 0.5,
                 "steps": steps
             }
-            
+
         except Exception as e:
-            raise Exception(f"Error finding transit route: {str(e)}")
+            st.error(f"Error finding transit route: {str(e)}")
+            raise
 
     def get_network_status(self) -> Dict[str, Any]:
         """Get current status of the public transit network."""
