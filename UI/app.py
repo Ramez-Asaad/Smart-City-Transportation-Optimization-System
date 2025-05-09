@@ -16,19 +16,25 @@ from controller.controller import TransportationController
 from utils.helpers import load_data
 from components.dashboard_metrics import render_dashboard_metrics, render_public_transit_section
 from components.transit_planner import render_route_planner
-from components.network_status import render_network_status
 from components.schedule_optimizer import render_schedule_optimizer
 from components.driving_assist import render_driving_assist
 from components.reports import render_reports
+from utils.traffic_simulation import TrafficSimulator
+from utils.visualization import TrafficVisualizer
 
 st.set_page_config("Cairo Smart City", layout="wide")
 
 # Initialize controller if not in session state
 if 'controller' not in st.session_state:
     st.session_state.controller = TransportationController()
-
-# Load data once for reuse
+    
 neighborhoods, roads, facilities = load_data()
+
+# Initialize traffic simulator if not in session state
+if 'traffic_simulator' not in st.session_state:
+    _, node_positions, _, graph = st.session_state.controller.base_map, st.session_state.controller.node_positions, st.session_state.controller.neighborhood_ids, st.session_state.controller.graph
+    st.session_state.traffic_simulator = TrafficSimulator(graph, node_positions, roads)
+    st.session_state.traffic_visualizer = TrafficVisualizer(node_positions, st.session_state.traffic_simulator)
 
 # Sidebar Navigation
 menu = st.sidebar.radio("Navigation", ["Dashboard", "Data", "Reports"])
@@ -55,9 +61,9 @@ if menu == "Dashboard":
         with route_tabs[1]:
             render_driving_assist(st.session_state.controller)
     
-    # Network Status Tab
+    # Network Status Tab (Now with Traffic Simulation)
     with main_tabs[1]:
-        render_network_status(st.session_state.controller)
+        st.session_state.traffic_visualizer.display_traffic_simulation()
     
     # Schedule Optimization Tab
     with main_tabs[2]:
