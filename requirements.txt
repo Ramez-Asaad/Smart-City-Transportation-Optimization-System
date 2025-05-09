@@ -6,6 +6,4 @@ streamlit-folium>=0.15.0
 numpy>=1.24.0
 plotly>=5.18.0
 pathlib>=1.0.1
-heapq3>=0.1.0
-typing>=3.7.4.3
 json5>=0.9.14
