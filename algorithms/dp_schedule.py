@@ -1,12 +1,12 @@
 import pandas as pd
 import networkx as nx
 import folium
-from utils.helpers import load_data, build_map
+from utils.helpers import load_data, build_map, load_transit_data
 from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 
 class PublicTransitOptimizer:
-    def __init__(self, bus_routes: pd.DataFrame, metro_lines: pd.DataFrame, demand_data: Dict):
+    def __init__(self, bus_routes: pd.DataFrame = None, metro_lines: pd.DataFrame = None, demand_data: Dict = None):
         """Initialize the optimizer with transit data."""
         # Load base network data
         self.neighborhoods, self.roads, self.facilities = load_data()
@@ -18,15 +18,22 @@ class PublicTransitOptimizer:
         self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
         self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
         
-        # Store transit data
-        self.bus_routes = self._validate_routes(bus_routes, "bus")
-        self.metro_lines = self._validate_routes(metro_lines, "metro")
-        self.demand_data = demand_data
-        self.network = nx.Graph()
+        # Load transit data if not provided
+        if bus_routes is None or metro_lines is None or demand_data is None:
+            try:
+                self.bus_routes, self.metro_lines, self.demand_data, self.transfer_points = load_transit_data(self.valid_nodes)
+            except Exception as e:
+                st.error(f"Failed to load transit data: {str(e)}")
+                raise
+        else:
+            # Store provided transit data
+            self.bus_routes = self._validate_routes(bus_routes, "bus")
+            self.metro_lines = self._validate_routes(metro_lines, "metro")
+            self.demand_data = demand_data
+            self.transfer_points = set()
+            self._identify_transfer_points()
         
-        # Initialize transfer points
-        self.transfer_points = set()
-        self._identify_transfer_points()
+        self.network = nx.Graph()
         
     def _validate_routes(self, routes: pd.DataFrame, route_type: str) -> pd.DataFrame:
         """Validate and clean route data to ensure all stops exist in the network."""

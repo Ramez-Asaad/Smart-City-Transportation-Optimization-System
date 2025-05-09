@@ -4,6 +4,7 @@ import folium
 import networkx as nx
 import os
 from pathlib import Path
+from typing import Dict, Tuple, Set
 
 @st.cache_data
 def load_data():
@@ -45,6 +46,99 @@ def load_data():
         raise
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
+        raise
+
+@st.cache_data
+def load_transit_data(valid_nodes: Set[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[Tuple[str, str], int], Set[str]]:
+    """
+    Load and validate transit data including bus routes, metro lines, and demand data.
+    
+    Args:
+        valid_nodes: Set of valid node IDs to validate against
+    
+    Returns:
+        Tuple containing:
+        - bus_routes: DataFrame of validated bus routes
+        - metro_lines: DataFrame of validated metro lines
+        - demand_data: Dictionary of demand between node pairs
+        - transfer_points: Set of transfer points (intersections between bus and metro)
+    """
+    try:
+        # Get the absolute path to the data directory
+        current_dir = Path(__file__).parent.parent
+        data_dir = current_dir / "data"
+
+        # Load transit data files
+        transit_files = ["bus_routes.csv", "metro_lines.csv", "demand_data.csv"]
+        for file in transit_files:
+            if not (data_dir / file).exists():
+                raise FileNotFoundError(f"Transit data file not found: {file}")
+
+        # Load and clean bus routes
+        bus_routes = pd.read_csv(data_dir / "bus_routes.csv", skipinitialspace=True)
+        bus_routes.columns = bus_routes.columns.str.strip()
+
+        # Load and clean metro lines
+        metro_lines = pd.read_csv(data_dir / "metro_lines.csv", skipinitialspace=True)
+        metro_lines.columns = metro_lines.columns.str.strip()
+
+        # Load and clean demand data
+        demand_data = pd.read_csv(data_dir / "demand_data.csv", skipinitialspace=True)
+        demand_data.columns = demand_data.columns.str.strip()
+
+        # Convert demand data to dictionary
+        demand_dict = {
+            (str(row['FromID']).strip(), str(row['ToID']).strip()): row['DailyPassengers']
+            for _, row in demand_data.iterrows()
+        }
+
+        # Validate and collect stops/stations
+        bus_stops = set()
+        metro_stations = set()
+
+        # Process bus routes
+        valid_bus_routes = []
+        for _, route in bus_routes.iterrows():
+            stops = [str(s).strip() for s in route['Stops'].split(',')]
+            if valid_nodes:
+                stops = [stop for stop in stops if stop in valid_nodes]
+            if len(stops) >= 2:  # Only keep routes with at least 2 valid stops
+                route_copy = route.copy()
+                route_copy['Stops'] = ','.join(stops)
+                valid_bus_routes.append(route_copy)
+                bus_stops.update(stops)
+
+        # Process metro lines
+        valid_metro_lines = []
+        for _, line in metro_lines.iterrows():
+            stations = [str(s).strip() for s in line['Stations'].split(',')]
+            if valid_nodes:
+                stations = [station for station in stations if station in valid_nodes]
+            if len(stations) >= 2:  # Only keep lines with at least 2 valid stations
+                line_copy = line.copy()
+                line_copy['Stations'] = ','.join(stations)
+                valid_metro_lines.append(line_copy)
+                metro_stations.update(stations)
+
+        # Create DataFrames from valid routes
+        validated_bus_routes = pd.DataFrame(valid_bus_routes)
+        validated_metro_lines = pd.DataFrame(valid_metro_lines)
+
+        # Find transfer points (intersections between bus and metro)
+        transfer_points = bus_stops.intersection(metro_stations)
+
+        if validated_bus_routes.empty:
+            st.warning("No valid bus routes found after validation.")
+        if validated_metro_lines.empty:
+            st.warning("No valid metro lines found after validation.")
+
+        return validated_bus_routes, validated_metro_lines, demand_dict, transfer_points
+
+    except FileNotFoundError as e:
+        st.error(f"Transit data file not found: {str(e)}")
+        raise
+    except Exception as e:
+        st.error(f"Error loading transit data: {str(e)}")
         raise
 
 def calculate_distance(pos1, pos2):

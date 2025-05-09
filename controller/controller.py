@@ -6,7 +6,7 @@ import numpy as np
 from algorithms.mst import run_mst
 from algorithms.time_dijkstra import run_time_dijkstra, calculate_time_weight
 from algorithms.a_star import find_nearest_hospital, run_emergency_routing
-from utils.helpers import load_data, build_map
+from utils.helpers import load_data, build_map, load_transit_data
 from collections import defaultdict
 from algorithms.dp_schedule import PublicTransitOptimizer
 import networkx as nx
@@ -36,45 +36,18 @@ class TransportationController:
             for _, row in self.roads.iterrows()
         }
 
+        # Create set of valid nodes
+        self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
+        self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
+
         # Load transit data
         try:
-            current_dir = Path(__file__).parent.parent
-            data_dir = current_dir / "data"
-            bus_routes_path = data_dir / "bus_routes.csv"
-            metro_lines_path = data_dir / "metro_lines.csv"
-            
-            if bus_routes_path.exists() and metro_lines_path.exists():
-                self.bus_routes = pd.read_csv(bus_routes_path)
-                self.metro_lines = pd.read_csv(metro_lines_path)
-                
-                # Initialize transfer points (intersections between bus and metro)
-                self.transfer_points = set()
-                bus_stops = set()
-                metro_stations = set()
-                
-                # Collect all bus stops
-                for _, route in self.bus_routes.iterrows():
-                    stops = [str(s).strip() for s in route['Stops'].split(',')]
-                    bus_stops.update(stops)
-                
-                # Collect all metro stations
-                for _, line in self.metro_lines.iterrows():
-                    stations = [str(s).strip() for s in line['Stations'].split(',')]
-                    metro_stations.update(stations)
-                
-                # Find intersections
-                self.transfer_points = bus_stops.intersection(metro_stations)
-            else:
-                st.error("Transit data files not found. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
-                self.bus_routes = pd.DataFrame()
-                self.metro_lines = pd.DataFrame()
-                self.transfer_points = set()
-                
+            self.bus_routes, self.metro_lines, self.demand_data, self.transfer_points = load_transit_data(self.valid_nodes)
         except Exception as e:
             st.error(f"Could not load transit data: {str(e)}")
-            # Initialize with empty data if files not found
             self.bus_routes = pd.DataFrame()
             self.metro_lines = pd.DataFrame()
+            self.demand_data = {}
             self.transfer_points = set()
         
     def get_location_name(self, location_id: str) -> str:
