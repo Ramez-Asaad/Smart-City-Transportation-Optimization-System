@@ -536,15 +536,22 @@ class TransportationController:
             st.write("Bus Routes:", [f"{route['Route']}: {' → '.join(route['Stops'])}" for route in schedules["bus_schedules"]])
             st.write("Metro Lines:", [f"{line['Line']}: {' → '.join(line['Stations'])}" for line in schedules["metro_schedules"]])
 
+            # Collect all stops and stations
+            all_stops = set()
+            for route in schedules["bus_schedules"]:
+                all_stops.update(route["Stops"])
+            for line in schedules["metro_schedules"]:
+                all_stops.update(line["Stations"])
+
+            # Add all nodes to the graph first
+            for stop in all_stops:
+                transit_graph.add_node(stop)
+
             # Add bus routes to transit graph
             for route in schedules["bus_schedules"]:
                 stops = route["Stops"]
                 for i in range(len(stops) - 1):
                     try:
-                        # Validate both stops exist
-                        if stops[i] not in self.node_positions or stops[i + 1] not in self.node_positions:
-                            continue
-
                         # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stops[i]]
                         end_pos = self.node_positions[stops[i + 1]]
@@ -569,10 +576,6 @@ class TransportationController:
                 stations = line["Stations"]
                 for i in range(len(stations) - 1):
                     try:
-                        # Validate both stations exist
-                        if stations[i] not in self.node_positions or stations[i + 1] not in self.node_positions:
-                            continue
-
                         # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stations[i]]
                         end_pos = self.node_positions[stations[i + 1]]
@@ -592,12 +595,39 @@ class TransportationController:
                         st.warning(f"Error adding metro line segment {line['Line']} ({stations[i]} → {stations[i + 1]}): {str(e)}")
                         continue
 
+            # Add transfer edges between routes at transfer points
+            for stop in all_stops:
+                # Find all routes that include this stop
+                routes_at_stop = []
+                for route in schedules["bus_schedules"]:
+                    if stop in route["Stops"]:
+                        routes_at_stop.append(("bus", route["Route"]))
+                for line in schedules["metro_schedules"]:
+                    if stop in line["Stations"]:
+                        routes_at_stop.append(("metro", line["Line"]))
+                
+                # If this stop is served by multiple routes, add transfer edges
+                if len(routes_at_stop) > 1:
+                    # Add edges between all connected stops in different routes
+                    for i, (type1, route1) in enumerate(routes_at_stop):
+                        for type2, route2 in routes_at_stop[i+1:]:
+                            if type1 != type2 or route1 != route2:
+                                # Add transfer edge with a time penalty
+                                transit_graph.add_edge(stop, stop, 
+                                    type="transfer",
+                                    route_id=f"Transfer at {self.get_location_name(stop)}",
+                                    interval=5,  # 5-minute transfer interval
+                                    travel_time=10,  # 10-minute transfer time
+                                    transfer_points=[stop]
+                                )
+
             # Debug information about graph
             st.write("Graph Information:")
             st.write(f"Number of nodes: {len(transit_graph.nodes())}")
             st.write(f"Number of edges: {len(transit_graph.edges())}")
             st.write(f"Source node in graph: {source in transit_graph.nodes()}")
             st.write(f"Destination node in graph: {destination in transit_graph.nodes()}")
+            st.write("Transfer points in graph:", [stop for stop in all_stops if transit_graph.degree(stop) > 2])
 
             # Check if source and destination are in the same connected component
             if not nx.has_path(transit_graph, source, destination):
@@ -627,8 +657,8 @@ class TransportationController:
                 base_time = float(data[0]["travel_time"]) + float(data[0]["interval"]) / 2
                 if prefer_metro and data[0]["type"] == "bus":
                     base_time *= 1.5  # Penalty for bus if metro is preferred
-                if minimize_transfers and u in data[0]["transfer_points"]:
-                    base_time += 10  # Transfer time penalty
+                if minimize_transfers and data[0]["type"] == "transfer":
+                    base_time *= 2  # Higher penalty for transfers if minimizing them
                 return base_time
 
             path = nx.shortest_path(
