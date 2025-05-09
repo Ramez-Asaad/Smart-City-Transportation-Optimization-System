@@ -34,9 +34,15 @@ ENV/
 # Streamlit
 .streamlit/secrets.toml
 
-# Keep data files
-!data/*.csv
-!data/*.json
+# System Files
+.DS_Store
+Thumbs.db
+
+# Keep all data files
+!data/
+!data/*
+!.streamlit/
+!.streamlit/config.toml
 
 # Logs
 *.log
@@ -44,8 +50,4 @@ ENV/
 # Local development
 .env
 .env.local
-.env.*.local
-
-# System Files
-.DS_Store
-Thumbs.db 
+.env.*.local 

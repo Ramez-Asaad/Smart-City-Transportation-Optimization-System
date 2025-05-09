@@ -1,6 +1,8 @@
 [server]
 enableCORS = false
 enableXsrfProtection = false
+maxUploadSize = 200
+maxMessageSize = 200
 
 [browser]
 gatherUsageStats = false
@@ -10,4 +12,14 @@ primaryColor = "#1E88E5"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F2F6"
 textColor = "#262730"
-font = "sans serif" 
+font = "sans serif"
+
+[deprecation]
+showfileUploaderEncoding = false
+
+[logger]
+level = "info"
+
+[client]
+showErrorDetails = true
+toolbarMode = "auto" 
