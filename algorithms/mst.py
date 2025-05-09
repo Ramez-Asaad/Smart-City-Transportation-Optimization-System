@@ -4,8 +4,20 @@ import folium
 import networkx as nx
 from utils.helpers import load_data, build_map
 
-@st.cache_data
 def run_mst(source, dest, time_of_day, scenario, algo):
+    """
+    Run Minimum Spanning Tree algorithm on the transportation network.
+    
+    Args:
+        source: Starting point ID
+        dest: Destination ID
+        time_of_day: Time period for analysis
+        scenario: Optional scenario for road closures
+        algo: Algorithm to use ('Prim' or 'Kruskal')
+        
+    Returns:
+        Tuple[str, Dict]: HTML string of map visualization and results dictionary
+    """
     # Load data
     neighborhoods, roads, facilities = load_data()
     
@@ -47,11 +59,9 @@ def run_mst(source, dest, time_of_day, scenario, algo):
 
         mst_results["total_distance"] = total_dist
         mst_results["num_edges"] = len(mst.edges())
-        
-        # Add list of roads in MST
         mst_results["roads"] = [base_graph[u][v]['name'] for u, v in mst.edges()]
     else:
-        mst_results["warning"] = "⚠️ No valid roads between neighborhoods!"
+        mst_results["warning"] = "No valid roads between neighborhoods!"
 
     # Return the map as an HTML string
     return m._repr_html_(), mst_results

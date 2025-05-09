@@ -30,29 +30,15 @@ def render_optimization_results(results: Dict[str, Any]) -> None:
 
 def render_schedule_optimizer(controller) -> None:
     """Render the schedule optimization interface."""
-    st.subheader("Schedule Optimization")
+    st.subheader("Transit Schedule Optimization")
     
-    # Input parameters
+    # Configuration inputs
     col1, col2 = st.columns(2)
-    
-    total_buses = col1.number_input(
-        "Total Available Buses",
-        min_value=50,
-        max_value=500,
-        value=200,
-        help="Total number of buses available for allocation"
-    )
-    
-    total_trains = col2.number_input(
-        "Total Available Trains",
-        min_value=10,
-        max_value=100,
-        value=30,
-        help="Total number of metro trains available for allocation"
-    )
+    total_buses = col1.number_input("Total Available Buses", min_value=50, max_value=500, value=200)
+    total_trains = col2.number_input("Total Available Trains", min_value=10, max_value=100, value=30)
     
     if st.button("Optimize Schedules"):
-        with st.spinner("Optimizing public transit schedules..."):
+        with st.spinner("Optimizing transit schedules..."):
             try:
                 results = controller.run_algorithm(
                     algorithm="DP",
@@ -63,8 +49,9 @@ def render_schedule_optimizer(controller) -> None:
                     total_trains=total_trains
                 )
                 
-                if results:
+                if results and "results" in results:
                     render_optimization_results(results)
-                    
+                else:
+                    st.error("Failed to generate schedules")
             except Exception as e:
-                st.error(f"An error occurred: {str(e)}") 
+                st.error(str(e)) 

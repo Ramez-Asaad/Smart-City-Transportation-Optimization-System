@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import streamlit as st
 import folium
 import pandas as pd
@@ -14,14 +14,19 @@ import os
 from pathlib import Path
 
 class TransportationController:
+    """
+    Main controller class for the Smart City Transportation System.
+    Handles data loading, route planning, and network management.
+    """
     def __init__(self):
-        """Initialize the controller with data and graph."""
+        """Initialize the controller with data and graph structures."""
+        # Load base network data
         self.neighborhoods, self.roads, self.facilities = load_data()
         self.base_map, self.node_positions, self.neighborhood_ids, self.graph = build_map(
             self.neighborhoods, self.roads, self.facilities
         )
         
-        # Create lookup dictionaries for names
+        # Create lookup dictionaries for efficient name resolution
         self.neighborhood_names = {
             str(row["ID"]): row["Name"]
             for _, row in self.neighborhoods.iterrows()
@@ -30,21 +35,19 @@ class TransportationController:
             str(row["ID"]): row["Name"]
             for _, row in self.facilities.iterrows()
         }
-        # Create road name lookup
         self.road_names = {
             (str(row["FromID"]), str(row["ToID"])): row["Name"]
             for _, row in self.roads.iterrows()
         }
 
-        # Create set of valid nodes
+        # Create set of valid nodes for validation
         self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
         self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
 
-        # Load transit data
+        # Load public transit data
         try:
             self.bus_routes, self.metro_lines, self.demand_data, self.transfer_points = load_transit_data(self.valid_nodes)
         except Exception as e:
-            st.error(f"Could not load transit data: {str(e)}")
             self.bus_routes = pd.DataFrame()
             self.metro_lines = pd.DataFrame()
             self.demand_data = {}
@@ -158,20 +161,19 @@ class TransportationController:
     def run_dp_scheduling(self, total_buses: int = 200, total_trains: int = 30) -> Dict[str, Any]:
         """Run the DP scheduling optimization and return results."""
         try:
-            # Load data
-            bus_routes = pd.read_csv('data/bus_routes.csv')
-            metro_lines = pd.read_csv('data/metro_lines.csv')
-            demand_data = pd.read_csv('data/demand_data.csv')
+            # Verify transit data is available
+            if self.bus_routes.empty or self.metro_lines.empty:
+                raise ValueError("Transit data not available")
             
-            # Clean demand data
-            demand_dict = defaultdict(int)
-            for _, row in demand_data.iterrows():
-                from_id = str(row['FromID'])
-                to_id = str(row['ToID'])
-                demand_dict[(from_id, to_id)] = row['DailyPassengers']
+            # Create optimizer with valid nodes
+            optimizer = PublicTransitOptimizer()
+            optimizer.valid_nodes = self.valid_nodes
+            optimizer.bus_routes = optimizer._validate_routes(self.bus_routes, "bus")
+            optimizer.metro_lines = optimizer._validate_routes(self.metro_lines, "metro")
+            optimizer.demand_data = self.demand_data
+            optimizer._identify_transfer_points()
             
-            # Create optimizer and run optimization
-            optimizer = PublicTransitOptimizer(bus_routes, metro_lines, demand_dict)
+            # Build network and run optimization
             optimizer.build_integrated_network()
             transfer_points = optimizer.optimize_transfer_points()
             bus_alloc, metro_alloc = optimizer.optimize_resource_allocation(
@@ -202,7 +204,7 @@ class TransportationController:
                 "type": "schedule"
             }
         except Exception as e:
-            raise Exception(f"Error in scheduling optimization: {str(e)}")
+            raise Exception(f"Error in transit optimization: {str(e)}")
 
     def run_algorithm(
         self,
@@ -256,42 +258,26 @@ class TransportationController:
             
             elif algorithm == "DP":
                 try:
-                    st.write("Initializing transit optimization...")
                     # Verify transit data is available
                     if self.bus_routes.empty or self.metro_lines.empty:
-                        raise ValueError("Transit data not available. Please check bus_routes.csv and metro_lines.csv.")
-
-                    # Show transit data status
-                    st.write("Transit Data Status:")
-                    st.write(f"Bus Routes: {len(self.bus_routes)} routes")
-                    st.write(f"Metro Lines: {len(self.metro_lines)} lines")
-                    st.write(f"Transfer Points: {len(self.transfer_points)} points")
+                        raise ValueError("Transit data not available")
 
                     total_buses = kwargs.get("total_buses", 200)
                     total_trains = kwargs.get("total_trains", 30)
                     
                     # Create optimizer instance
-                    st.write("Creating transit optimizer...")
                     optimizer = PublicTransitOptimizer()
                     
-                    # Build network
-                    st.write("Building integrated network...")
+                    # Build network and run optimization
                     optimizer.build_integrated_network()
-                    
-                    # Run optimization
-                    st.write("Running schedule optimization...")
                     transfer_points = optimizer.optimize_transfer_points()
                     bus_alloc, metro_alloc = optimizer.optimize_resource_allocation(
                         total_buses=total_buses,
                         total_trains=total_trains
                     )
                     
-                    # Generate schedules
-                    st.write("Generating transit schedules...")
+                    # Generate schedules and visualization
                     bus_schedules, metro_schedules = optimizer.generate_schedules(bus_alloc, metro_alloc)
-                    
-                    # Create visualization
-                    st.write("Creating network visualization...")
                     map_html = optimizer.create_visualization()
                     
                     # Return comprehensive results
@@ -313,22 +299,13 @@ class TransportationController:
                         "type": "schedule"
                     }
                 except Exception as e:
-                    st.error(f"Error in transit optimization: {str(e)}")
-                    # Show detailed error information
-                    if st.checkbox("Show Optimization Error Details"):
-                        st.error("Transit Optimization Error Details:")
-                        st.write("Bus Routes Shape:", self.bus_routes.shape if not self.bus_routes.empty else "No bus routes")
-                        st.write("Metro Lines Shape:", self.metro_lines.shape if not self.metro_lines.empty else "No metro lines")
-                        st.write("Transfer Points:", list(self.transfer_points))
-                        st.write("Error:", str(e))
-                    raise
+                    raise ValueError(f"Error in transit optimization: {str(e)}")
             
             else:
                 raise ValueError(f"Unknown algorithm: {algorithm}")
                 
         except Exception as e:
-            st.error(f"Algorithm error: {str(e)}")
-            raise
+            raise ValueError(str(e))
     
     def display_results(self, results: Dict[str, Any]):
         """
@@ -454,433 +431,539 @@ class TransportationController:
         minimize_transfers: bool = True,
         schedules: Dict = None
     ) -> Dict[str, Any]:
-        """Find optimal public transit route between two points."""
+        """
+        Find optimal public transit route between two points.
+        
+        Args:
+            source: Starting location ID
+            destination: Destination location ID
+            time_of_day: Time period for the journey
+            prefer_metro: Whether to prefer metro over bus routes
+            minimize_transfers: Whether to minimize number of transfers
+            schedules: Optional pre-computed schedules
+            
+        Returns:
+            Dictionary containing route details, visualization, and metrics
+        """
         try:
-            # Create base map first to ensure it works
-            try:
-                m = folium.Map(
-                    location=[30.0444, 31.2357],  # Cairo coordinates
-                    zoom_start=12
-                )
-            except Exception as e:
-                st.error(f"Error creating base map: {str(e)}")
-                raise ValueError("Failed to create map visualization")
+            # Initialize base map for visualization
+            m = folium.Map(
+                location=[30.0444, 31.2357],  # Cairo coordinates
+                zoom_start=12
+            )
 
-            # Convert IDs to strings and strip whitespace
+            # Validate input parameters
             source = str(source).strip()
             destination = str(destination).strip()
-
-            # Debug information
-            st.write("Debug Info:")
-            st.write(f"Source: {source} ({self.get_location_name(source)})")
-            st.write(f"Destination: {destination} ({self.get_location_name(destination)})")
-
-            # Validate input data
-            if self.bus_routes.empty or self.metro_lines.empty:
-                raise ValueError("Transit data not available. Please check that bus_routes.csv and metro_lines.csv exist in the data directory.")
             
             if source not in self.node_positions:
-                raise ValueError(f"Source location '{source}' ({self.get_location_name(source)}) not found in the network.")
-            
+                raise ValueError(f"Source location '{source}' not found in network")
             if destination not in self.node_positions:
-                raise ValueError(f"Destination location '{destination}' ({self.get_location_name(destination)}) not found in the network.")
+                raise ValueError(f"Destination location '{destination}' not found in network")
+            if self.bus_routes.empty or self.metro_lines.empty:
+                raise ValueError("Transit data not available")
 
-            # Create a specialized graph for transit routing
+            # Create specialized transit graph
             transit_graph = nx.MultiGraph()
             
             # Initialize schedules if not provided
             if schedules is None:
-                # Process bus routes
-                bus_schedules = []
-                for _, route in self.bus_routes.iterrows():
-                    try:
-                        stops = [str(s).strip() for s in route["Stops"].split(",")]
-                        valid_stops = []
-                        for stop in stops:
-                            if stop not in self.node_positions:
-                                st.warning(f"Bus route {route['RouteID']}: Stop {stop} not found in network")
-                            else:
-                                valid_stops.append(stop)
-                        
-                        if len(valid_stops) >= 2:
-                            bus_schedules.append({
-                                "Route": route["RouteID"],
-                                "Stops": valid_stops,
-                                "Interval (min)": 15,  # Default interval
-                                "Transfer Points": list(self.transfer_points)
-                            })
-                    except Exception as e:
-                        st.warning(f"Error processing bus route {route['RouteID']}: {str(e)}")
-                        continue
+                schedules = self._generate_default_schedules()
 
-                # Process metro lines
-                metro_schedules = []
-                for _, line in self.metro_lines.iterrows():
-                    try:
-                        stations = [str(s).strip() for s in line["Stations"].split(",")]
-                        valid_stations = []
-                        for station in stations:
-                            if station not in self.node_positions:
-                                st.warning(f"Metro line {line['LineID']}: Station {station} not found in network")
-                            else:
-                                valid_stations.append(station)
-                        
-                        if len(valid_stations) >= 2:
-                            metro_schedules.append({
-                                "Line": line["LineID"],
-                                "Stations": valid_stations,
-                                "Interval (min)": 10,  # Default interval
-                                "Transfer Points": list(self.transfer_points)
-                            })
-                    except Exception as e:
-                        st.warning(f"Error processing metro line {line['LineID']}: {str(e)}")
-                        continue
-
-                schedules = {
-                    "bus_schedules": bus_schedules,
-                    "metro_schedules": metro_schedules
-                }
-
-            # Debug information
-            st.write("Available Routes:")
-            st.write("Bus Routes:", [f"{route['Route']}: {' → '.join(route['Stops'])}" for route in schedules["bus_schedules"]])
-            st.write("Metro Lines:", [f"{line['Line']}: {' → '.join(line['Stations'])}" for line in schedules["metro_schedules"]])
-
-            # Collect all stops and stations
-            all_stops = set()
-            for route in schedules["bus_schedules"]:
-                all_stops.update(route["Stops"])
-            for line in schedules["metro_schedules"]:
-                all_stops.update(line["Stations"])
-
-            # Add all nodes to the graph first
-            for stop in all_stops:
-                transit_graph.add_node(stop)
-
-            # Add bus routes to transit graph
-            for route in schedules["bus_schedules"]:
-                stops = route["Stops"]
-                for i in range(len(stops) - 1):
-                    try:
-                        # Get coordinates and calculate travel time
-                        start_pos = self.node_positions[stops[i]]
-                        end_pos = self.node_positions[stops[i + 1]]
-                        distance = ((start_pos[0] - end_pos[0])**2 + 
-                                  (start_pos[1] - end_pos[1])**2)**0.5 * 100
-                        travel_time = max(5, (distance / 30) * 60)  # Minimum 5 minutes between stops
-
-                        edge_data = {
-                            "type": "bus",
-                            "route_id": route["Route"],
-                            "interval": float(route["Interval (min)"]),
-                            "travel_time": float(travel_time),
-                            "transfer_points": route["Transfer Points"]
-                        }
-                        transit_graph.add_edge(stops[i], stops[i + 1], **edge_data)
-                    except Exception as e:
-                        st.warning(f"Error adding bus route segment {route['Route']} ({stops[i]} → {stops[i + 1]}): {str(e)}")
-                        continue
-
-            # Add metro lines to transit graph
-            for line in schedules["metro_schedules"]:
-                stations = line["Stations"]
-                for i in range(len(stations) - 1):
-                    try:
-                        # Get coordinates and calculate travel time
-                        start_pos = self.node_positions[stations[i]]
-                        end_pos = self.node_positions[stations[i + 1]]
-                        distance = ((start_pos[0] - end_pos[0])**2 + 
-                                  (start_pos[1] - end_pos[1])**2)**0.5 * 100
-                        travel_time = max(3, (distance / 60) * 60)  # Minimum 3 minutes between stations
-
-                        edge_data = {
-                            "type": "metro",
-                            "route_id": line["Line"],
-                            "interval": float(line["Interval (min)"]),
-                            "travel_time": float(travel_time),
-                            "transfer_points": line["Transfer Points"]
-                        }
-                        transit_graph.add_edge(stations[i], stations[i + 1], **edge_data)
-                    except Exception as e:
-                        st.warning(f"Error adding metro line segment {line['Line']} ({stations[i]} → {stations[i + 1]}): {str(e)}")
-                        continue
-
-            # Add transfer edges between routes at transfer points
-            for stop in all_stops:
-                # Find all routes that include this stop
-                routes_at_stop = []
-                for route in schedules["bus_schedules"]:
-                    if stop in route["Stops"]:
-                        routes_at_stop.append(("bus", route["Route"]))
-                for line in schedules["metro_schedules"]:
-                    if stop in line["Stations"]:
-                        routes_at_stop.append(("metro", line["Line"]))
-                
-                # If this stop is served by multiple routes, add transfer edges
-                if len(routes_at_stop) > 1:
-                    # Add edges between all connected stops in different routes
-                    for i, (type1, route1) in enumerate(routes_at_stop):
-                        for type2, route2 in routes_at_stop[i+1:]:
-                            if type1 != type2 or route1 != route2:
-                                # Add transfer edge with a time penalty
-                                transit_graph.add_edge(stop, stop, 
-                                    type="transfer",
-                                    route_id=f"Transfer at {self.get_location_name(stop)}",
-                                    interval=5,  # 5-minute transfer interval
-                                    travel_time=10,  # 10-minute transfer time
-                                    transfer_points=[stop]
-                                )
-
-            # Debug information about graph
-            st.write("Graph Information:")
-            st.write(f"Number of nodes: {len(transit_graph.nodes())}")
-            st.write(f"Number of edges: {len(transit_graph.edges())}")
-            st.write(f"Source node in graph: {source in transit_graph.nodes()}")
-            st.write(f"Destination node in graph: {destination in transit_graph.nodes()}")
-            st.write("Transfer points in graph:", [stop for stop in all_stops if transit_graph.degree(stop) > 2])
-
-            # Check if source and destination are in the same connected component
+            # Build transit network
+            all_stops = self._build_transit_network(transit_graph, schedules)
+            
+            # Verify route exists
             if not nx.has_path(transit_graph, source, destination):
-                # Find connected components
-                components = list(nx.connected_components(transit_graph))
-                source_component = None
-                dest_component = None
-                
-                for i, component in enumerate(components):
-                    if source in component:
-                        source_component = i
-                    if destination in component:
-                        dest_component = i
-                
-                error_msg = f"No transit route found between {self.get_location_name(source)} and {self.get_location_name(destination)}. "
-                if source_component is None:
-                    error_msg += f"Source location ({self.get_location_name(source)}) is not connected to any transit routes."
-                elif dest_component is None:
-                    error_msg += f"Destination location ({self.get_location_name(destination)}) is not connected to any transit routes."
-                else:
-                    error_msg += "These locations are in different disconnected parts of the transit network."
-                
-                raise ValueError(error_msg)
+                raise ValueError(f"No route available between {self.get_location_name(source)} and {self.get_location_name(destination)}")
 
-            # Find shortest path considering preferences
-            def edge_weight(u, v, data):
-                base_time = float(data[0]["travel_time"]) + float(data[0]["interval"]) / 2
-                if prefer_metro and data[0]["type"] == "bus":
-                    base_time *= 1.5  # Penalty for bus if metro is preferred
-                if minimize_transfers and data[0]["type"] == "transfer":
-                    base_time *= 2  # Higher penalty for transfers if minimizing them
-                return base_time
-
-            path = nx.shortest_path(
-                transit_graph,
-                source,
-                destination,
-                weight=edge_weight
-            )
+            # Find optimal path
+            path = self._find_optimal_path(transit_graph, source, destination, prefer_metro, minimize_transfers)
             
-            # After finding the path, create the visualization
-            try:
-                # Add Font Awesome for icons
-                m.get_root().header.add_child(folium.Element("""
-                    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
-                """))
-
-                # Create icons
-                bus_icon = folium.DivIcon(
-                    html='<div style="font-size: 18px; color: blue;"><i class="fa fa-bus"></i></div>',
-                    icon_size=(30, 30),
-                    icon_anchor=(15, 15)
-                )
-
-                metro_icon = folium.DivIcon(
-                    html='<div style="font-size: 18px; color: red;"><i class="fa fa-subway"></i></div>',
-                    icon_size=(30, 30),
-                    icon_anchor=(15, 15)
-                )
-
-                # Track added stops to avoid duplicates
-                added_stops = set()
-
-                # Draw route segments
-                for i in range(len(path) - 1):
-                    try:
-                        edge_data = transit_graph[path[i]][path[i + 1]][0]
-                        color = "red" if edge_data["type"] == "metro" else "blue"
-                        
-                        # Get coordinates for both stops
-                        start_coords = self.node_positions.get(path[i])
-                        end_coords = self.node_positions.get(path[i + 1])
-                        
-                        if not start_coords or not end_coords:
-                            st.warning(f"Missing coordinates for segment {path[i]} → {path[i + 1]}")
-                            continue
-
-                        # Draw route line
-                        folium.PolyLine(
-                            locations=[start_coords, end_coords],
-                            color=color,
-                            weight=4,
-                            opacity=0.8,
-                            popup=f"{edge_data['type'].title()} {edge_data['route_id']}"
-                        ).add_to(m)
-
-                        # Add stop markers
-                        for node_id, coords in [(path[i], start_coords), (path[i + 1], end_coords)]:
-                            if node_id not in added_stops:
-                                # Determine if this is a transfer point
-                                is_transfer = node_id in self.transfer_points
-                                
-                                # Get transport type
-                                icon = metro_icon if edge_data["type"] == "metro" else bus_icon
-                                color = "red" if edge_data["type"] == "metro" else "blue"
-                                
-                                # Create popup content
-                                popup_content = f"""
-                                <div style="width: 200px;">
-                                    <b>{self.get_location_name(node_id)}</b><br>
-                                    {edge_data['type'].title()} Stop<br>
-                                    {'Transfer Point<br>' if is_transfer else ''}
-                                    Next departure: {edge_data['interval']:.0f} min
-                                </div>
-                                """
-                                
-                                # Add markers
-                                folium.Marker(
-                                    location=coords,
-                                    icon=icon,
-                                    popup=folium.Popup(popup_content, max_width=300)
-                                ).add_to(m)
-                                
-                                if is_transfer:
-                                    folium.CircleMarker(
-                                        location=coords,
-                                        radius=12,
-                                        color="green",
-                                        fill=True,
-                                        fill_opacity=0.3,
-                                        weight=2,
-                                        popup="Transfer Point"
-                                    ).add_to(m)
-                                else:
-                                    folium.CircleMarker(
-                                        location=coords,
-                                        radius=8,
-                                        color=color,
-                                        fill=True,
-                                        fill_opacity=0.3,
-                                        weight=2
-                                    ).add_to(m)
-                                
-                                added_stops.add(node_id)
-                    except Exception as e:
-                        st.warning(f"Error drawing route segment: {str(e)}")
-                        continue
-
-                # Add legend
-                legend_html = """
-                <div style="position: fixed; 
-                            bottom: 50px; right: 50px; width: 180px; 
-                            border:2px solid grey; z-index:9999; font-size:14px;
-                            background-color:white;
-                            padding: 10px;
-                            border-radius: 5px;">
-                    <p style="margin-bottom: 10px;"><strong>Route Legend</strong></p>
-                    <div style="margin-bottom: 5px;">
-                        <i class="fa fa-bus" style="color:blue;"></i> Bus Stop
-                    </div>
-                    <div style="margin-bottom: 5px;">
-                        <i class="fa fa-subway" style="color:red;"></i> Metro Station
-                    </div>
-                    <div style="margin-bottom: 5px;">
-                        <hr style="border: 2px solid blue; display: inline-block; width: 30px; margin-right: 5px;">
-                        Bus Route
-                    </div>
-                    <div style="margin-bottom: 5px;">
-                        <hr style="border: 2px solid red; display: inline-block; width: 30px; margin-right: 5px;">
-                        Metro Line
-                    </div>
-                    <div>
-                        <i class="fa fa-circle" style="color:green;"></i> Transfer Point
-                    </div>
-                </div>
-                """
-                m.get_root().html.add_child(folium.Element(legend_html))
-
-            except Exception as e:
-                st.error(f"Error creating route visualization: {str(e)}")
-                # Return a simple map if visualization fails
-                m = folium.Map(
-                    location=[30.0444, 31.2357],  # Cairo coordinates
-                    zoom_start=12
-                )
-
-            # Calculate route details
-            total_travel_time = 0
-            total_waiting_time = 0
-            total_distance = 0
-            steps = []
-            num_transfers = 0
-            current_line = None
-            wait_time = 0
+            if not path:
+                raise ValueError("Failed to find a valid path")
             
+            if len(path) < 2:
+                raise ValueError("Path must contain at least 2 stops")
+            
+            # Verify all path nodes are in the graph
+            for node in path:
+                if node not in transit_graph:
+                    raise ValueError(f"Invalid node in path: {node}")
+                if node not in self.node_positions:
+                    raise ValueError(f"Missing coordinates for node: {node}")
+            
+            # Verify all consecutive nodes are connected
             for i in range(len(path) - 1):
-                edge_data = transit_graph[path[i]][path[i + 1]][0]
-                
-                # Add travel time
-                segment_time = float(edge_data["travel_time"])
-                total_travel_time += segment_time
-                
-                # Track waiting time
-                if i == 0 or (current_line and current_line != edge_data["route_id"]):
-                    wait_time = float(edge_data["interval"]) / 2
-                    total_waiting_time += wait_time
-                    if i > 0:  # Count transfers after first segment
-                        num_transfers += 1
-                
-                current_line = edge_data["route_id"]
-                
-                # Calculate segment distance
-                try:
-                    start_pos = self.node_positions[path[i]]
-                    end_pos = self.node_positions[path[i + 1]]
-                    distance = ((start_pos[0] - end_pos[0])**2 + 
-                              (start_pos[1] - end_pos[1])**2)**0.5 * 100
-                    total_distance += distance
-                except Exception:
-                    pass
-                
-                # Add step details
-                step = {
-                    "mode": edge_data["type"].title(),
-                    "from_stop": self.get_location_name(path[i]),
-                    "to_stop": self.get_location_name(path[i + 1]),
-                    "travel_time": segment_time,
-                    "wait_time": wait_time if (i == 0 or (current_line != edge_data["route_id"])) else 0,
-                    "next_departure": f"Every {edge_data['interval']:.0f} minutes",
-                    "line_info": f"{edge_data['type'].title()} {edge_data['route_id']}",
-                    "summary": f"{edge_data['type'].title()} {edge_data['route_id']}: {self.get_location_name(path[i])} → {self.get_location_name(path[i + 1])}"
-                }
-                
-                if path[i] in self.transfer_points:
-                    step["transfer_info"] = "Transfer point - Follow signs to your next line"
-                    step["summary"] = f"🔄 Transfer: {step['summary']}"
-                
-                steps.append(step)
-
+                if not transit_graph.has_edge(path[i], path[i + 1]):
+                    raise ValueError(f"Missing edge between {path[i]} and {path[i + 1]}")
+            
+            # Create visualization
+            map_html = self._create_route_visualization(m, transit_graph, path)
+            
+            # Calculate route details
+            route_details = self._calculate_route_details(transit_graph, path)
+            
             return {
-                "visualization": m._repr_html_(),
-                "total_travel_time": total_travel_time,
-                "total_waiting_time": total_waiting_time,
-                "total_time": total_travel_time + total_waiting_time,
-                "total_distance": total_distance,
-                "num_transfers": num_transfers,
-                "total_cost": (total_travel_time + total_waiting_time) * 0.5,
-                "steps": steps
+                "visualization": map_html,
+                **route_details
             }
 
         except Exception as e:
-            st.error(f"Error finding transit route: {str(e)}")
-            raise
+            raise ValueError(str(e))
+
+    def _generate_default_schedules(self) -> Dict:
+        """Generate default schedules for bus routes and metro lines."""
+        bus_schedules = []
+        for _, route in self.bus_routes.iterrows():
+            stops = [str(s).strip() for s in route["Stops"].split(",")]
+            valid_stops = [stop for stop in stops if stop in self.node_positions]
+            
+            if len(valid_stops) >= 2:
+                bus_schedules.append({
+                    "Route": route["RouteID"],
+                    "Stops": valid_stops,
+                    "Interval (min)": 15,
+                    "Transfer Points": list(self.transfer_points)
+                })
+
+        metro_schedules = []
+        for _, line in self.metro_lines.iterrows():
+            stations = [str(s).strip() for s in line["Stations"].split(",")]
+            valid_stations = [station for station in stations if station in self.node_positions]
+            
+            if len(valid_stations) >= 2:
+                metro_schedules.append({
+                    "Line": line["LineID"],
+                    "Stations": valid_stations,
+                    "Interval (min)": 10,
+                    "Transfer Points": list(self.transfer_points)
+                })
+
+        return {
+            "bus_schedules": bus_schedules,
+            "metro_schedules": metro_schedules
+        }
+
+    def _build_transit_network(self, transit_graph: nx.MultiGraph, schedules: Dict) -> set:
+        """Build the transit network graph with bus routes and metro lines."""
+        # Collect all stops and stations
+        all_stops = set()
+        
+        # Add bus routes
+        for route in schedules["bus_schedules"]:
+            stops = route["Stops"]
+            all_stops.update(stops)
+            
+            # Add edges between consecutive stops
+            for i in range(len(stops) - 1):
+                start_pos = self.node_positions[stops[i]]
+                end_pos = self.node_positions[stops[i + 1]]
+                distance = ((start_pos[0] - end_pos[0])**2 + 
+                          (start_pos[1] - end_pos[1])**2)**0.5 * 100
+                travel_time = max(5, (distance / 30) * 60)
+
+                edge_data = {
+                    "type": "bus",
+                    "route_id": route["Route"],
+                    "interval": float(route["Interval (min)"]),
+                    "travel_time": float(travel_time),
+                    "transfer_points": route["Transfer Points"]
+                }
+                
+                # Add edge in both directions since it's an undirected graph
+                transit_graph.add_edge(stops[i], stops[i + 1], **edge_data)
+                transit_graph.add_edge(stops[i + 1], stops[i], **edge_data)
+        
+        # Add metro lines
+        for line in schedules["metro_schedules"]:
+            stations = line["Stations"]
+            all_stops.update(stations)
+            
+            # Add edges between consecutive stations
+            for i in range(len(stations) - 1):
+                start_pos = self.node_positions[stations[i]]
+                end_pos = self.node_positions[stations[i + 1]]
+                distance = ((start_pos[0] - end_pos[0])**2 + 
+                          (start_pos[1] - end_pos[1])**2)**0.5 * 100
+                travel_time = max(3, (distance / 60) * 60)
+
+                edge_data = {
+                    "type": "metro",
+                    "route_id": line["Line"],
+                    "interval": float(line["Interval (min)"]),
+                    "travel_time": float(travel_time),
+                    "transfer_points": line["Transfer Points"]
+                }
+                
+                # Add edge in both directions since it's an undirected graph
+                transit_graph.add_edge(stations[i], stations[i + 1], **edge_data)
+                transit_graph.add_edge(stations[i + 1], stations[i], **edge_data)
+        
+        # Add transfer edges
+        for stop in all_stops:
+            # Find all routes that include this stop
+            routes_at_stop = []
+            for route in schedules["bus_schedules"]:
+                if stop in route["Stops"]:
+                    routes_at_stop.append(("bus", route["Route"]))
+            for line in schedules["metro_schedules"]:
+                if stop in line["Stations"]:
+                    routes_at_stop.append(("metro", line["Line"]))
+            
+            # Add transfer edges if stop serves multiple routes
+            if len(routes_at_stop) > 1:
+                edge_data = {
+                    "type": "transfer",
+                    "route_id": f"Transfer at {self.get_location_name(stop)}",
+                    "interval": 5,
+                    "travel_time": 10,
+                    "transfer_points": [stop]
+                }
+                transit_graph.add_edge(stop, stop, **edge_data)
+        
+        return all_stops
+
+    def _find_optimal_path(
+        self, 
+        graph: nx.MultiGraph, 
+        source: str, 
+        destination: str,
+        prefer_metro: bool,
+        minimize_transfers: bool
+    ) -> List[str]:
+        """Find the optimal path considering preferences."""
+        def edge_weight(u, v, data):
+            base_time = float(data["travel_time"]) + float(data["interval"]) / 2
+            if prefer_metro and data["type"] == "bus":
+                base_time *= 1.5
+            if minimize_transfers and data["type"] == "transfer":
+                base_time *= 2
+            return base_time
+
+        try:
+            # Find shortest path considering weights
+            path = nx.shortest_path(
+                graph,
+                source,
+                destination,
+                weight=lambda u, v, d: edge_weight(u, v, d[0])
+            )
+            
+            # Verify path is valid
+            for i in range(len(path) - 1):
+                if not graph.has_edge(path[i], path[i + 1]):
+                    raise nx.NetworkXNoPath(f"Invalid path segment between {path[i]} and {path[i + 1]}")
+            
+            return path
+            
+        except nx.NetworkXNoPath:
+            raise ValueError(f"No route found between {self.get_location_name(source)} and {self.get_location_name(destination)}")
+        except Exception as e:
+            raise ValueError(f"Error finding path: {str(e)}")
+
+    def _create_route_visualization(self, m: folium.Map, graph: nx.MultiGraph, path: List[str]) -> str:
+        """Create an interactive map visualization of the route."""
+        if not path or len(path) < 2:
+            raise ValueError("Invalid path for visualization")
+
+        # Add Font Awesome icons
+        m.get_root().header.add_child(folium.Element("""
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+        """))
+
+        # Create icons for stops
+        bus_icon = folium.DivIcon(
+            html='<div style="font-size: 24px; color: blue;"><i class="fa fa-bus"></i></div>',
+            icon_size=(40, 40),
+            icon_anchor=(20, 20)
+        )
+        metro_icon = folium.DivIcon(
+            html='<div style="font-size: 24px; color: red;"><i class="fa fa-subway"></i></div>',
+            icon_size=(40, 40),
+            icon_anchor=(20, 20)
+        )
+        start_icon = folium.DivIcon(
+            html='<div style="font-size: 28px; color: green;"><i class="fa fa-play-circle"></i></div>',
+            icon_size=(40, 40),
+            icon_anchor=(20, 20)
+        )
+        end_icon = folium.DivIcon(
+            html='<div style="font-size: 28px; color: red;"><i class="fa fa-stop-circle"></i></div>',
+            icon_size=(40, 40),
+            icon_anchor=(20, 20)
+        )
+
+        # Draw all route segments first
+        for i in range(len(path) - 1):
+            start_node = path[i]
+            end_node = path[i + 1]
+            
+            # Get edge data
+            edge_data = graph[start_node][end_node][0]
+            transport_type = edge_data["type"]
+            
+            # Get coordinates
+            start_coords = self.node_positions[start_node]
+            end_coords = self.node_positions[end_node]
+            
+            # Draw route line
+            color = "red" if transport_type == "metro" else "blue"
+            weight = 8 if transport_type == "metro" else 6  # Increased thickness
+            
+            folium.PolyLine(
+                locations=[start_coords, end_coords],
+                color=color,
+                weight=weight,
+                opacity=0.8,
+                popup=f"{transport_type.title()} {edge_data['route_id']}"
+            ).add_to(m)
+
+        # Then add all stop markers
+        for i, node_id in enumerate(path):
+            coords = self.node_positions[node_id]
+            is_transfer = node_id in self.transfer_points
+            is_start = i == 0
+            is_end = i == len(path) - 1
+            
+            # Get edge data for popup
+            if i < len(path) - 1:
+                edge_data = graph[node_id][path[i + 1]][0]
+            else:
+                edge_data = graph[path[i - 1]][node_id][0]
+            
+            # Choose icon
+            if is_start:
+                icon = start_icon
+            elif is_end:
+                icon = end_icon
+            else:
+                icon = metro_icon if edge_data["type"] == "metro" else bus_icon
+            
+            # Add marker
+            folium.Marker(
+                location=coords,
+                icon=icon,
+                popup=folium.Popup(self._create_stop_popup(
+                    node_id, edge_data, is_transfer, is_start, is_end
+                ), max_width=300)
+            ).add_to(m)
+            
+            # Add transfer point circle if needed
+            if is_transfer:
+                folium.CircleMarker(
+                    location=coords,
+                    radius=15,
+                    color="green",
+                    fill=True,
+                    fill_opacity=0.3,
+                    weight=3,
+                    popup="Transfer Point"
+                ).add_to(m)
+
+            # Add special circle for start/end points
+            if is_start or is_end:
+                color = "green" if is_start else "red"
+                folium.CircleMarker(
+                    location=coords,
+                    radius=18,
+                    color=color,
+                    fill=False,
+                    weight=3,
+                    opacity=0.8,
+                    popup="Start Point" if is_start else "End Point"
+                ).add_to(m)
+
+        # Fit map bounds to route with padding
+        route_coords = [self.node_positions[node_id] for node_id in path]
+        min_lat = min(coord[0] for coord in route_coords)
+        max_lat = max(coord[0] for coord in route_coords)
+        min_lon = min(coord[1] for coord in route_coords)
+        max_lon = max(coord[1] for coord in route_coords)
+        
+        # Add padding (about 10% of the route span)
+        lat_padding = (max_lat - min_lat) * 0.1
+        lon_padding = (max_lon - min_lon) * 0.1
+        
+        # Set bounds with padding
+        m.fit_bounds([
+            [min_lat - lat_padding, min_lon - lon_padding],
+            [max_lat + lat_padding, max_lon + lon_padding]
+        ])
+
+        # Add legend
+        m.get_root().html.add_child(folium.Element(self._create_legend_html()))
+        
+        return m._repr_html_()
+
+    def _create_stop_popup(self, node_id: str, edge_data: Dict, is_transfer: bool, is_start: bool = False, is_end: bool = False) -> str:
+        """Create HTML content for stop popup."""
+        location_name = self.get_location_name(node_id)
+        stop_type = "Start" if is_start else "End" if is_end else edge_data['type'].title()
+        
+        content = f"""
+        <div style="width: 200px; padding: 10px;">
+            <h4 style="margin: 0 0 10px 0; color: {'green' if is_start else 'red' if is_end else 'black'};">
+                {location_name}
+            </h4>
+            <div style="margin-bottom: 5px;">
+                <strong>Type:</strong> {stop_type} Stop
+            </div>
+        """
+        
+        if not (is_start or is_end):
+            content += f"""
+            <div style="margin-bottom: 5px;">
+                <strong>Line:</strong> {edge_data['route_id']}
+            </div>
+            <div style="margin-bottom: 5px;">
+                <strong>Next departure:</strong> {edge_data['interval']:.0f} min
+            </div>
+            """
+            
+        if is_transfer:
+            content += """
+            <div style="margin-top: 10px; padding: 5px; background-color: #e8f5e9; border-radius: 5px;">
+                <i class="fa fa-exchange"></i> Transfer Point
+            </div>
+            """
+            
+        content += "</div>"
+        return content
+
+    def _create_legend_html(self) -> str:
+        """Create HTML content for map legend."""
+        return """
+        <div style="position: fixed; 
+                    bottom: 50px; right: 50px; width: 200px; 
+                    border:2px solid grey; z-index:9999; font-size:14px;
+                    background-color:white;
+                    padding: 15px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <h4 style="margin: 0 0 10px 0;">Route Legend</h4>
+            <div style="margin-bottom: 8px;">
+                <i class="fa fa-play-circle" style="color:green; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Start Point</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fa fa-stop-circle" style="color:red; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">End Point</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fa fa-bus" style="color:blue; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Bus Stop</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fa fa-subway" style="color:red; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Metro Station</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <hr style="border: 6px solid blue; display: inline-block; width: 30px; margin-right: 8px;">
+                <span>Bus Route</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <hr style="border: 8px solid red; display: inline-block; width: 30px; margin-right: 8px;">
+                <span>Metro Line</span>
+            </div>
+            <div>
+                <i class="fa fa-exchange" style="color:green; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Transfer Point</span>
+            </div>
+        </div>
+        """
+
+    def _calculate_route_details(self, graph: nx.MultiGraph, path: List[str]) -> Dict[str, Any]:
+        """Calculate detailed metrics for the route."""
+        total_travel_time = 0
+        total_waiting_time = 0
+        total_distance = 0
+        total_cost = 0
+        steps = []
+        num_transfers = 0
+        current_line = None
+        current_mode = None
+        stops_in_current_metro_journey = 0
+        
+        for i in range(len(path) - 1):
+            edge_data = graph[path[i]][path[i + 1]][0]
+            transport_mode = edge_data["type"]
+            
+            # Calculate times
+            segment_time = float(edge_data["travel_time"])
+            total_travel_time += segment_time
+            
+            wait_time = 0
+            if i == 0 or (current_line and current_line != edge_data["route_id"]):
+                wait_time = float(edge_data["interval"]) / 2
+                total_waiting_time += wait_time
+                if i > 0:
+                    num_transfers += 1
+                    # Add fare for new segment
+                    if transport_mode == "bus":
+                        total_cost += 12  # Average bus fare in Cairo
+                    elif transport_mode == "metro":
+                        # Reset metro stops counter and add base fare
+                        if current_mode != "metro":
+                            stops_in_current_metro_journey = 0
+                            total_cost += 8  # Base metro fare
+            
+            current_line = edge_data["route_id"]
+            
+            # For first segment, add initial fare
+            if i == 0:
+                if transport_mode == "bus":
+                    total_cost += 12  # Average bus fare
+                elif transport_mode == "metro":
+                    total_cost += 8  # Base metro fare
+            
+            # Count stops for metro fare calculation
+            if transport_mode == "metro":
+                stops_in_current_metro_journey += 1
+                # Update metro fare based on number of stops
+                if stops_in_current_metro_journey == 10:
+                    total_cost += 2  # Additional fare for 10+ stops
+                elif stops_in_current_metro_journey == 17:
+                    total_cost += 5  # Additional fare for 17+ stops
+                elif stops_in_current_metro_journey == 24:
+                    total_cost += 5  # Additional fare for 24+ stops
+            
+            current_mode = transport_mode
+            
+            # Calculate distance
+            start_pos = self.node_positions[path[i]]
+            end_pos = self.node_positions[path[i + 1]]
+            distance = ((start_pos[0] - end_pos[0])**2 + 
+                      (start_pos[1] - end_pos[1])**2)**0.5 * 100
+            total_distance += distance
+            
+            # Create step details
+            step = {
+                "mode": transport_mode.title(),
+                "from_stop": self.get_location_name(path[i]),
+                "to_stop": self.get_location_name(path[i + 1]),
+                "travel_time": segment_time,
+                "wait_time": wait_time,
+                "next_departure": f"Every {edge_data['interval']:.0f} minutes",
+                "line_info": f"{transport_mode.title()} {edge_data['route_id']}",
+                "summary": f"{transport_mode.title()} {edge_data['route_id']}: {self.get_location_name(path[i])} → {self.get_location_name(path[i + 1])}"
+            }
+            
+            if path[i] in self.transfer_points:
+                step["transfer_info"] = "Transfer point - Follow signs to your next line"
+                step["summary"] = f"🔄 Transfer: {step['summary']}"
+            
+            steps.append(step)
+
+        return {
+            "total_travel_time": total_travel_time,
+            "total_waiting_time": total_waiting_time,
+            "total_time": total_travel_time + total_waiting_time,
+            "total_distance": total_distance,
+            "num_transfers": num_transfers,
+            "total_cost": total_cost,
+            "steps": steps
+        }
 
     def get_network_status(self) -> Dict[str, Any]:
         """Get current status of the public transit network."""

@@ -6,8 +6,19 @@ from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 
 class PublicTransitOptimizer:
+    """
+    Optimizes public transit schedules using dynamic programming.
+    Handles bus routes, metro lines, and transfer points.
+    """
     def __init__(self, bus_routes: pd.DataFrame = None, metro_lines: pd.DataFrame = None, demand_data: Dict = None):
-        """Initialize the optimizer with transit data."""
+        """
+        Initialize the optimizer with transit data.
+        
+        Args:
+            bus_routes: DataFrame containing bus route information
+            metro_lines: DataFrame containing metro line information
+            demand_data: Dictionary mapping (from_id, to_id) to daily passenger count
+        """
         # Load base network data
         self.neighborhoods, self.roads, self.facilities = load_data()
         self.base_map, self.node_positions, _, self.base_graph = build_map(
@@ -15,43 +26,61 @@ class PublicTransitOptimizer:
         )
         
         # Create set of valid nodes from neighborhoods and facilities
-        self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
-        self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
+        self.valid_nodes = set(str(row["ID"]).strip() for _, row in self.neighborhoods.iterrows())
+        self.valid_nodes.update(str(row["ID"]).strip() for _, row in self.facilities.iterrows())
         
         # Load transit data if not provided
         if bus_routes is None or metro_lines is None or demand_data is None:
             try:
                 self.bus_routes, self.metro_lines, self.demand_data, self.transfer_points = load_transit_data(self.valid_nodes)
             except Exception as e:
-                st.error(f"Failed to load transit data: {str(e)}")
-                raise
+                raise Exception(f"Failed to load transit data: {str(e)}")
         else:
             # Store provided transit data
             self.bus_routes = self._validate_routes(bus_routes, "bus")
             self.metro_lines = self._validate_routes(metro_lines, "metro")
-            self.demand_data = demand_data
+            self.demand_data = {
+                (str(k[0]).strip(), str(k[1]).strip()): int(v)
+                for k, v in demand_data.items()
+            }
             self.transfer_points = set()
             self._identify_transfer_points()
         
-        self.network = nx.Graph()
+        # Initialize the network graph
+        self.network = nx.MultiGraph()
         
     def _validate_routes(self, routes: pd.DataFrame, route_type: str) -> pd.DataFrame:
-        """Validate and clean route data to ensure all stops exist in the network."""
+        """
+        Validate and clean route data.
+        
+        Args:
+            routes: DataFrame containing route information
+            route_type: Type of route ('bus' or 'metro')
+            
+        Returns:
+            DataFrame containing validated routes
+        """
         valid_routes = []
-        stops_column = 'Stops' if route_type == 'bus' else 'Stations'
-        
         for _, route in routes.iterrows():
-            # Convert stops to list of strings
-            stops = [str(s.strip()) for s in route[stops_column].split(',')]
-            
-            # Filter out invalid stops
-            valid_stops = [stop for stop in stops if stop in self.valid_nodes]
-            
-            if len(valid_stops) >= 2:  # Only keep routes with at least 2 valid stops
-                route_copy = route.copy()
-                route_copy[stops_column] = ','.join(valid_stops)
-                valid_routes.append(route_copy)
-        
+            try:
+                # Get stops/stations and clean IDs
+                stops_col = 'Stations' if route_type == 'metro' else 'Stops'
+                stops = [str(s).strip() for s in str(route[stops_col]).split(',')]
+                
+                # Filter valid stops
+                valid_stops = [stop for stop in stops if stop in self.valid_nodes]
+                
+                if len(valid_stops) >= 2:  # Only keep routes with at least 2 valid stops
+                    route_dict = route.to_dict()
+                    route_dict[stops_col] = ','.join(valid_stops)
+                    # Clean string values
+                    for key in route_dict:
+                        if isinstance(route_dict[key], str):
+                            route_dict[key] = route_dict[key].strip()
+                    valid_routes.append(route_dict)
+            except Exception:
+                continue
+                
         return pd.DataFrame(valid_routes)
         
     def _identify_transfer_points(self):
@@ -145,7 +174,12 @@ class PublicTransitOptimizer:
                     )
     
     def optimize_transfer_points(self) -> List[Tuple[str, float]]:
-        """Optimize transfer points based on demand and connectivity."""
+        """
+        Optimize transfer points based on demand and connectivity.
+        
+        Returns:
+            List of tuples (point_id, score) sorted by score in descending order
+        """
         transfer_scores = []
         
         for point in self.transfer_points:

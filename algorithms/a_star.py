@@ -1,6 +1,5 @@
 import pandas as pd
 import heapq
-import streamlit as st
 import folium
 import math
 from utils.helpers import load_data, build_map
@@ -13,6 +12,13 @@ def heuristic(node_pos, goal_pos):
     """
     Calculate heuristic distance between two nodes using their coordinates.
     Uses Euclidean distance scaled by a factor to ensure admissibility.
+    
+    Args:
+        node_pos: Tuple of (y, x) coordinates for current node
+        goal_pos: Tuple of (y, x) coordinates for goal node
+        
+    Returns:
+        float: Estimated distance to goal
     """
     if not node_pos or not goal_pos:
         return 0
@@ -27,6 +33,9 @@ def a_star(graph, start, goal, node_positions):
         start: Starting node ID
         goal: Goal node ID
         node_positions: Dictionary of node coordinates
+        
+    Returns:
+        Tuple[List[str], float]: Path and total cost, or (None, inf) if no path exists
     """
     open_set = [(0, start)]
     came_from = {}
@@ -65,7 +74,21 @@ def a_star(graph, start, goal, node_positions):
     return None, float('inf')
 
 def create_emergency_map(neighborhoods, facilities, roads, node_positions, path=None, source=None, hospitals=None):
-    """Create a map visualization for emergency routing."""
+    """
+    Create a map visualization for emergency routing.
+    
+    Args:
+        neighborhoods: DataFrame of neighborhoods
+        facilities: DataFrame of facilities
+        roads: DataFrame of roads
+        node_positions: Dictionary of node coordinates
+        path: Optional list of node IDs in the path
+        source: Optional source node ID
+        hospitals: Optional DataFrame of hospitals
+        
+    Returns:
+        str: HTML string of the map visualization
+    """
     # Create base map
     m = folium.Map(
         location=[
@@ -196,7 +219,15 @@ def find_nearest_hospital(start_id: str, graph, hospitals, node_positions):
     return best_path, min_cost, best_hospital
 
 def run_emergency_routing(source_id):
-    """Run emergency routing to find nearest hospital."""
+    """
+    Run emergency routing to find nearest hospital.
+    
+    Args:
+        source_id: Starting location ID
+        
+    Returns:
+        Tuple[str, Dict]: HTML string of map visualization and results dictionary
+    """
     # Load and build the graph
     neighborhoods, roads, facilities = load_data()
     m, node_positions, _, graph = build_map(neighborhoods, roads, facilities)
@@ -205,7 +236,6 @@ def run_emergency_routing(source_id):
     hospitals = facilities[facilities["Type"].str.lower() == "medical"]
     
     if hospitals.empty:
-        st.error("No hospitals found in the facilities data!")
         return m._repr_html_(), {"error": "No hospitals found in the data"}
     
     path, cost, hospital = find_nearest_hospital(source_id, graph, hospitals, node_positions)

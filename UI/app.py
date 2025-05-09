@@ -36,7 +36,6 @@ menu = st.sidebar.radio("Navigation", ["Dashboard", "Data", "Reports"])
 # ------ DASHBOARD ------
 if menu == "Dashboard":
     st.title("Smart City Dashboard")
-    
     # Render dashboard metrics
     render_dashboard_metrics(neighborhoods, roads, facilities)
     
