@@ -3,22 +3,33 @@ import streamlit as st
 import folium
 import networkx as nx
 import os
+from pathlib import Path
 
 @st.cache_data
 def load_data():
     """Load and clean the data from CSV files."""
     try:
+        # Get the absolute path to the data directory
+        current_dir = Path(__file__).parent.parent
+        data_dir = current_dir / "data"
+
+        # Verify data files exist
+        required_files = ["neighborhoods.csv", "roads.csv", "facilities.csv"]
+        for file in required_files:
+            if not (data_dir / file).exists():
+                raise FileNotFoundError(f"Required data file not found: {file}")
+
         # Load the data from CSV files with explicit handling of whitespace
         neighborhoods = pd.read_csv(
-            os.path.join("data", "neighborhoods.csv"),
+            data_dir / "neighborhoods.csv",
             skipinitialspace=True
         )
         roads = pd.read_csv(
-            os.path.join("data", "roads.csv"),
+            data_dir / "roads.csv",
             skipinitialspace=True
         )
         facilities = pd.read_csv(
-            os.path.join("data", "facilities.csv"),
+            data_dir / "facilities.csv",
             skipinitialspace=True
         )
         
@@ -29,8 +40,12 @@ def load_data():
                 df[col] = df[col].str.strip()
         
         return neighborhoods, roads, facilities
+    except FileNotFoundError as e:
+        st.error(f"Data file not found: {str(e)}")
+        raise
     except Exception as e:
-        raise Exception(f"Error loading data: {str(e)}")
+        st.error(f"Error loading data: {str(e)}")
+        raise
 
 def calculate_distance(pos1, pos2):
     """Calculate Euclidean distance between two coordinates."""
