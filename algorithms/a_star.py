@@ -170,50 +170,28 @@ def find_nearest_hospital(start_id: str, graph, hospitals, node_positions):
         graph: NetworkX graph
         hospitals: DataFrame of hospitals
         node_positions: Dictionary of node coordinates
+        
+    Returns:
+        Tuple[List[str], float, str]: Best path, minimum cost, and hospital name
     """
-    # Debug information
-    st.write("Debugging A* Search:")
-    st.write(f"Starting from: {start_id}")
-    st.write(f"Found {len(hospitals)} hospitals:")
-    for _, row in hospitals.iterrows():
-        st.write(f"- {row['Name']} (ID: {row['ID']})")
-
     best_path = None
     min_cost = float('inf')
     best_hospital = None
-    best_hospital_id = None
 
     # Try to find path to each hospital
     for _, row in hospitals.iterrows():
         hospital_id = str(row["ID"])
-        st.write(f"\nTrying to find path to {row['Name']} ({hospital_id})")
         
-        # Check if hospital is in graph
-        if hospital_id not in graph:
-            st.write(f"⚠️ Hospital {hospital_id} not found in road network!")
+        # Skip if either node is not in graph
+        if hospital_id not in graph or start_id not in graph:
             continue
-            
-        # Check if start point is in graph
-        if start_id not in graph:
-            st.write(f"⚠️ Start point {start_id} not found in road network!")
-            return None, float('inf'), None
         
         path, cost = a_star(graph, start_id, hospital_id, node_positions)
         
-        if path:
-            st.write(f"✓ Found path! Cost: {cost:.2f} km")
-            if cost < min_cost:
-                min_cost = cost
-                best_path = path
-                best_hospital = row["Name"]
-                best_hospital_id = hospital_id
-        else:
-            st.write("✗ No path found to this hospital")
-
-    if best_path:
-        st.write(f"\n✅ Best path found to {best_hospital} with cost {min_cost:.2f} km")
-    else:
-        st.write("\n❌ No valid paths found to any hospital")
+        if path and cost < min_cost:
+            min_cost = cost
+            best_path = path
+            best_hospital = row["Name"]
 
     return best_path, min_cost, best_hospital
 

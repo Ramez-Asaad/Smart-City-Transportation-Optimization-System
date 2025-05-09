@@ -14,15 +14,9 @@ class PublicTransitOptimizer:
             self.neighborhoods, self.roads, self.facilities
         )
         
-        # Debug: Print base graph nodes
-        print("\nDebug - Base Graph Nodes:", list(self.base_graph.nodes()))
-        
         # Create set of valid nodes from neighborhoods and facilities
         self.valid_nodes = set(str(row["ID"]) for _, row in self.neighborhoods.iterrows())
         self.valid_nodes.update(str(row["ID"]) for _, row in self.facilities.iterrows())
-        
-        # Debug: Print valid nodes
-        print("\nDebug - Valid Nodes:", sorted(list(self.valid_nodes)))
         
         # Store transit data
         self.bus_routes = self._validate_routes(bus_routes, "bus")
@@ -39,23 +33,17 @@ class PublicTransitOptimizer:
         valid_routes = []
         stops_column = 'Stops' if route_type == 'bus' else 'Stations'
         
-        print(f"\nDebug - Validating {route_type} routes:")
-        
         for _, route in routes.iterrows():
             # Convert stops to list of strings
             stops = [str(s.strip()) for s in route[stops_column].split(',')]
-            print(f"  Route {route.get('RouteID', '')}: Original stops = {stops}")
             
             # Filter out invalid stops
             valid_stops = [stop for stop in stops if stop in self.valid_nodes]
-            print(f"  Route {route.get('RouteID', '')}: Valid stops = {valid_stops}")
             
             if len(valid_stops) >= 2:  # Only keep routes with at least 2 valid stops
                 route_copy = route.copy()
                 route_copy[stops_column] = ','.join(valid_stops)
                 valid_routes.append(route_copy)
-            else:
-                print(f"Warning: Skipping {route_type} route {route.get('RouteID', '')} - insufficient valid stops")
         
         return pd.DataFrame(valid_routes)
         
@@ -82,25 +70,17 @@ class PublicTransitOptimizer:
         # Start with the base road network, ensuring string IDs
         self.network = nx.Graph()
         
-        # Debug: Print base graph edges before conversion
-        print("\nDebug - Base Graph Edges:")
+        # Add base graph edges
         for u, v, data in self.base_graph.edges(data=True):
-            print(f"  Edge {u} -> {v}")
             self.network.add_edge(str(u), str(v), **data)
         
-        # Debug: Print network nodes after base graph conversion
-        print("\nDebug - Network Nodes after base graph conversion:", list(self.network.nodes()))
-        
         # Add bus routes
-        print("\nDebug - Adding bus routes:")
         for _, route in self.bus_routes.iterrows():
             stops = [str(s.strip()) for s in route['Stops'].split(',')]
-            print(f"  Processing bus route {route['RouteID']}: {stops}")
             
             for i in range(len(stops)-1):
                 # Skip if either stop is not in valid nodes
                 if stops[i] not in self.valid_nodes or stops[i+1] not in self.valid_nodes:
-                    print(f"    Skipping edge {stops[i]} -> {stops[i+1]} (invalid nodes)")
                     continue
                 
                 # Get coordinates for visualization
@@ -116,12 +96,10 @@ class PublicTransitOptimizer:
                             str(stops[i+1]),
                             weight='weight'
                         )
-                        print(f"    Added bus edge {stops[i]} -> {stops[i+1]} (distance: {distance})")
-                    except Exception as e:
+                    except Exception:
                         # If no road path exists, use direct distance
                         distance = ((start_pos[0] - end_pos[0])**2 + 
                                   (start_pos[1] - end_pos[1])**2)**0.5
-                        print(f"    Added bus edge {stops[i]} -> {stops[i+1]} (direct distance: {distance})")
                     
                     self.network.add_edge(
                         stops[i],
@@ -133,15 +111,12 @@ class PublicTransitOptimizer:
                     )
         
         # Add metro lines
-        print("\nDebug - Adding metro lines:")
         for _, line in self.metro_lines.iterrows():
             stations = [str(s.strip()) for s in line['Stations'].split(',')]
-            print(f"  Processing metro line {line['LineID']}: {stations}")
             
             for i in range(len(stations)-1):
                 # Skip if either station is not in valid nodes
                 if stations[i] not in self.valid_nodes or stations[i+1] not in self.valid_nodes:
-                    print(f"    Skipping edge {stations[i]} -> {stations[i+1]} (invalid nodes)")
                     continue
                 
                 # Get coordinates for visualization
@@ -152,7 +127,6 @@ class PublicTransitOptimizer:
                     # Calculate direct distance for metro (doesn't follow roads)
                     distance = ((start_pos[0] - end_pos[0])**2 + 
                               (start_pos[1] - end_pos[1])**2)**0.5
-                    print(f"    Added metro edge {stations[i]} -> {stations[i+1]} (distance: {distance})")
                     
                     self.network.add_edge(
                         stations[i],
@@ -162,9 +136,6 @@ class PublicTransitOptimizer:
                         weight=distance,
                         capacity=line['DailyPassengers']
                     )
-        
-        # Debug: Print final network nodes
-        print("\nDebug - Final Network Nodes:", list(self.network.nodes()))
     
     def optimize_transfer_points(self) -> List[Tuple[str, float]]:
         """Optimize transfer points based on demand and connectivity."""

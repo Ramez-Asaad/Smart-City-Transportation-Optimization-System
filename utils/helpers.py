@@ -4,7 +4,6 @@ import folium
 import networkx as nx
 import os
 
-#
 @st.cache_data
 def load_data():
     """Load and clean the data from CSV files."""
@@ -12,7 +11,7 @@ def load_data():
         # Load the data from CSV files with explicit handling of whitespace
         neighborhoods = pd.read_csv(
             os.path.join("data", "neighborhoods.csv"),
-            skipinitialspace=True  # Handle spaces after commas
+            skipinitialspace=True
         )
         roads = pd.read_csv(
             os.path.join("data", "roads.csv"),
@@ -23,23 +22,19 @@ def load_data():
             skipinitialspace=True
         )
         
-        # Clean column names
+        # Clean column names and data
         for df in [neighborhoods, roads, facilities]:
-            # Remove any whitespace from column names
             df.columns = df.columns.str.strip()
-            # Clean data in string columns
             for col in df.select_dtypes(include=['object']).columns:
                 df[col] = df[col].str.strip()
         
-        # Print DataFrame info for debugging
-        print("Neighborhoods columns:", neighborhoods.columns.tolist())
-        print("Roads columns:", roads.columns.tolist())
-        print("Facilities columns:", facilities.columns.tolist())
-        
         return neighborhoods, roads, facilities
     except Exception as e:
-        print(f"Error loading data: {str(e)}")
-        raise
+        raise Exception(f"Error loading data: {str(e)}")
+
+def calculate_distance(pos1, pos2):
+    """Calculate Euclidean distance between two coordinates."""
+    return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)**0.5
 
 @st.cache_data
 def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=True):
@@ -57,37 +52,23 @@ def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=T
         tuple: (folium.Map, dict, list, dict) - The map object, node positions, neighborhood IDs, and graph
     """
     try:
-        # Print first few rows of each DataFrame for debugging
-        print("\nNeighborhoods head:")
-        print(neighborhoods.head())
-        print("\nRoads head:")
-        print(roads.head())
-        print("\nFacilities head:")
-        print(facilities.head())
-        
-        # Build node positions
+        # Build node positions from neighborhoods
         node_positions = {}
         for _, row in neighborhoods.iterrows():
             try:
                 node_id = str(row['ID']).strip()
-                y_coord = float(row['Y-coordinate'])
-                x_coord = float(row['X-coordinate'])
-                node_positions[node_id] = (y_coord, x_coord)
-            except Exception as e:
-                print(f"Error processing neighborhood {row['ID']}: {str(e)}")
-                print("Row data:", row)
+                node_positions[node_id] = (float(row['Y-coordinate']), float(row['X-coordinate']))
+            except Exception:
                 continue
         
-        # Add facility positions
-        for _, row in facilities.iterrows():
-            try:
-                node_id = str(row['ID']).strip()
-                y_coord = float(row['Y-coordinate'])
-                x_coord = float(row['X-coordinate'])
-                node_positions[node_id] = (y_coord, x_coord)
-            except Exception as e:
-                print(f"Error processing facility {row['ID']}: {str(e)}")
-                continue
+        # Add facility positions if needed for routing
+        if show_facilities:
+            for _, row in facilities.iterrows():
+                try:
+                    node_id = str(row['ID']).strip()
+                    node_positions[node_id] = (float(row['Y-coordinate']), float(row['X-coordinate']))
+                except Exception:
+                    continue
         
         neighborhood_ids_str = neighborhoods["ID"].astype(str).str.strip().tolist()
 
@@ -98,46 +79,47 @@ def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=T
 
         # Add neighborhood markers
         for _, row in neighborhoods.iterrows():
-            try:
-                folium.CircleMarker(
-                    location=[float(row["Y-coordinate"]), float(row["X-coordinate"])],
-                    radius=6,
-                    color="blue",
-                    fill=True,
-                    fill_opacity=0.8,
-                    popup=f"{row['Name']}<br>Population: {row['Population']}<br>Type: {row['Type']}"
-                ).add_to(m)
-            except Exception as e:
-                print(f"Error adding neighborhood marker: {str(e)}")
-                continue
+            folium.CircleMarker(
+                location=[row["Y-coordinate"], row["X-coordinate"]],
+                radius=6,
+                color="blue",
+                fill=True,
+                fill_opacity=0.8,
+                popup=f"{row['Name']}<br>Population: {row['Population']}<br>Type: {row['Type']}"
+            ).add_to(m)
 
         # Add facility markers if requested
         if show_facilities:
             for _, row in facilities.iterrows():
-                try:
-                    folium.Marker(
-                        location=[float(row["Y-coordinate"]), float(row["X-coordinate"])],
-                        icon=folium.Icon(color="red", icon="info-sign"),
-                        popup=f"{row['Name']}<br>Type: {row['Type']}"
-                    ).add_to(m)
-                except Exception as e:
-                    print(f"Error adding facility marker: {str(e)}")
-                    continue
+                folium.Marker(
+                    location=[row["Y-coordinate"], row["X-coordinate"]],
+                    icon=folium.Icon(color="red", icon="info-sign"),
+                    popup=f"{row['Name']}<br>Type: {row['Type']}"
+                ).add_to(m)
 
-        # Filter roads based on the scenario
+        # Filter roads based on scenario and facilities
+        filtered_roads = roads.copy()
         if scenario:
-            roads = roads[~roads["FromID"].astype(str).str.contains(scenario, case=False)]
-            roads = roads[~roads["ToID"].astype(str).str.contains(scenario, case=False)]
-
-        # Clean road IDs
-        roads["FromID"] = roads["FromID"].astype(str).str.strip()
-        roads["ToID"] = roads["ToID"].astype(str).str.strip()
+            filtered_roads = filtered_roads[~filtered_roads["FromID"].astype(str).str.contains(scenario, case=False)]
+            filtered_roads = filtered_roads[~filtered_roads["ToID"].astype(str).str.contains(scenario, case=False)]
+        
+        if not show_facilities:
+            # Filter out roads connected to facilities
+            facility_ids = facilities["ID"].astype(str).str.strip().tolist()
+            filtered_roads = filtered_roads[
+                ~filtered_roads["FromID"].astype(str).str.strip().isin(facility_ids) &
+                ~filtered_roads["ToID"].astype(str).str.strip().isin(facility_ids)
+            ]
 
         # Create the graph for algorithms
         graph = nx.Graph()
         
+        # Add nodes to graph
+        for node_id in node_positions:
+            graph.add_node(node_id)
+        
         # Add road connections
-        for _, row in roads.iterrows():
+        for _, row in filtered_roads.iterrows():
             try:
                 from_id = str(row["FromID"]).strip()
                 to_id = str(row["ToID"]).strip()
@@ -152,28 +134,18 @@ def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=T
                         condition=float(row["Condition(1-10)"])
                     )
                     
-                    # Create detailed popup text
-                    popup_text = f"""
-                    <b>{row['Name']}</b><br>
-                    Distance: {row['Distance(km)']} km<br>
-                    Capacity: {row['Current Capacity(vehicles/hour)']} vehicles/hour<br>
-                    Condition: {row['Condition(1-10)']} / 10
-                    """
-                    
                     # Draw road on map
                     folium.PolyLine(
                         [node_positions[from_id], node_positions[to_id]],
                         color="gray",
                         weight=1,
                         opacity=0.4,
-                        popup=popup_text
+                        popup=f"{row['Name']}<br>Distance: {row['Distance(km)']} km<br>Capacity: {row['Current Capacity(vehicles/hour)']} vehicles/hour<br>Condition: {row['Condition(1-10)']} / 10"
                     ).add_to(m)
-            except Exception as e:
-                print(f"Error processing road {from_id} -> {to_id}: {str(e)}")
+            except Exception:
                 continue
 
         return m, node_positions, neighborhood_ids_str, graph
         
     except Exception as e:
-        print(f"Error building map: {str(e)}")
-        raise
+        raise Exception(f"Error building map: {str(e)}")

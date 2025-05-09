@@ -182,58 +182,29 @@ class TransportationController:
     def run_dp_scheduling(self, total_buses: int = 200, total_trains: int = 30) -> Dict[str, Any]:
         """Run the DP scheduling optimization and return results."""
         try:
-            print("\nDebug - Starting DP Scheduling:")
-            
             # Load data
-            print("Debug - Loading transit data files...")
             bus_routes = pd.read_csv('data/bus_routes.csv')
             metro_lines = pd.read_csv('data/metro_lines.csv')
             demand_data = pd.read_csv('data/demand_data.csv')
             
-            print("\nDebug - Bus Routes:")
-            print(bus_routes)
-            print("\nDebug - Metro Lines:")
-            print(metro_lines)
-            
             # Clean demand data
-            print("\nDebug - Processing demand data...")
             demand_dict = defaultdict(int)
             for _, row in demand_data.iterrows():
                 from_id = str(row['FromID'])
                 to_id = str(row['ToID'])
                 demand_dict[(from_id, to_id)] = row['DailyPassengers']
-                print(f"  Added demand: {from_id} -> {to_id}: {row['DailyPassengers']}")
             
-            # Create optimizer instance
-            print("\nDebug - Creating PublicTransitOptimizer instance...")
+            # Create optimizer and run optimization
             optimizer = PublicTransitOptimizer(bus_routes, metro_lines, demand_dict)
-            
-            # Build integrated network
-            print("\nDebug - Building integrated network...")
             optimizer.build_integrated_network()
-            
-            # Optimize transfer points
-            print("\nDebug - Optimizing transfer points...")
             transfer_points = optimizer.optimize_transfer_points()
-            print(f"Debug - Found {len(transfer_points)} transfer points")
-            
-            # Optimize resource allocation
-            print("\nDebug - Optimizing resource allocation...")
             bus_alloc, metro_alloc = optimizer.optimize_resource_allocation(
                 total_buses=total_buses,
                 total_trains=total_trains
             )
             
-            print("\nDebug - Resource allocation results:")
-            print("Bus allocation:", bus_alloc)
-            print("Metro allocation:", metro_alloc)
-            
-            # Generate schedules
-            print("\nDebug - Generating schedules...")
+            # Generate schedules and visualization
             bus_schedules, metro_schedules = optimizer.generate_schedules(bus_alloc, metro_alloc)
-            
-            # Create visualization
-            print("\nDebug - Creating visualization...")
             map_html = optimizer.create_visualization()
             
             # Return comprehensive results
@@ -255,9 +226,7 @@ class TransportationController:
                 "type": "schedule"
             }
         except Exception as e:
-            print(f"\nDebug - Error in run_dp_scheduling: {str(e)}")
-            print("Debug - Error traceback:", e.__traceback__)
-            raise
+            raise Exception(f"Error in scheduling optimization: {str(e)}")
 
     def run_algorithm(
         self,
@@ -442,35 +411,23 @@ class TransportationController:
     ) -> Dict[str, Any]:
         """Find optimal public transit route between two points."""
         try:
-            print("\nDebug - Starting transit route search:")
-            print(f"From: {source} ({self.get_location_name(source)})")
-            print(f"To: {destination} ({self.get_location_name(destination)})")
-            
             # Create a specialized graph for transit routing
             transit_graph = nx.MultiGraph()
             
             # Add bus routes
-            print("\nDebug - Processing bus routes:")
             bus_schedules = schedules.get("bus_schedules", [])
             for route in bus_schedules:
-                print(f"\nProcessing bus route {route['Route']}:")
                 stops = route["Stops"]
                 for i in range(len(stops) - 1):
-                    # Calculate travel time based on distance
                     try:
-                        # Get coordinates
+                        # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stops[i]]
                         end_pos = self.node_positions[stops[i + 1]]
-                        # Rough distance calculation (km)
                         distance = ((start_pos[0] - end_pos[0])**2 + 
                                   (start_pos[1] - end_pos[1])**2)**0.5 * 100
-                        # Estimate travel time (minutes) - assume 30 km/h for buses
                         travel_time = max(5, (distance / 30) * 60)  # Minimum 5 minutes between stops
-                        print(f"  Edge {stops[i]} -> {stops[i + 1]}: {travel_time:.1f} min")
-                    except Exception as e:
-                        # Default travel time if coordinates not found
-                        travel_time = 15
-                        print(f"  Using default time for {stops[i]} -> {stops[i + 1]}: {e}")
+                    except Exception:
+                        travel_time = 15  # Default time if coordinates not found
                     
                     edge_data = {
                         "type": "bus",
@@ -480,30 +437,21 @@ class TransportationController:
                         "transfer_points": route["Transfer Points"]
                     }
                     transit_graph.add_edge(stops[i], stops[i + 1], **edge_data)
-                    print(f"  Added edge with data: {edge_data}")
             
             # Add metro lines
-            print("\nDebug - Processing metro lines:")
             metro_schedules = schedules.get("metro_schedules", [])
             for line in metro_schedules:
-                print(f"\nProcessing metro line {line['Line']}:")
                 stations = line["Stations"]
                 for i in range(len(stations) - 1):
-                    # Calculate travel time based on distance
                     try:
-                        # Get coordinates
+                        # Get coordinates and calculate travel time
                         start_pos = self.node_positions[stations[i]]
                         end_pos = self.node_positions[stations[i + 1]]
-                        # Rough distance calculation (km)
                         distance = ((start_pos[0] - end_pos[0])**2 + 
                                   (start_pos[1] - end_pos[1])**2)**0.5 * 100
-                        # Estimate travel time (minutes) - assume 60 km/h for metro
                         travel_time = max(3, (distance / 60) * 60)  # Minimum 3 minutes between stations
-                        print(f"  Edge {stations[i]} -> {stations[i + 1]}: {travel_time:.1f} min")
-                    except Exception as e:
-                        # Default travel time if coordinates not found
-                        travel_time = 10
-                        print(f"  Using default time for {stations[i]} -> {stations[i + 1]}: {e}")
+                    except Exception:
+                        travel_time = 10  # Default time if coordinates not found
                     
                     edge_data = {
                         "type": "metro",
@@ -513,15 +461,9 @@ class TransportationController:
                         "transfer_points": line["Transfer Points"]
                     }
                     transit_graph.add_edge(stations[i], stations[i + 1], **edge_data)
-                    print(f"  Added edge with data: {edge_data}")
-            
-            print("\nDebug - Graph summary:")
-            print(f"Nodes: {list(transit_graph.nodes())}")
-            print(f"Edges: {list(transit_graph.edges())}")
             
             # Find shortest path considering preferences
             def edge_weight(u, v, data):
-                # Base time is travel time plus average waiting time (half the interval)
                 base_time = float(data[0]["travel_time"]) + float(data[0]["interval"]) / 2
                 if prefer_metro and data[0]["type"] == "bus":
                     base_time *= 1.5  # Penalty for bus if metro is preferred
@@ -529,43 +471,35 @@ class TransportationController:
                     base_time += 10  # Transfer time penalty
                 return base_time
             
-            print("\nDebug - Finding shortest path...")
             path = nx.shortest_path(
                 transit_graph,
                 source,
                 destination,
                 weight=edge_weight
             )
-            print(f"Found path: {path}")
             
             # Calculate route details
-            total_travel_time = 0  # Only actual travel time
-            total_waiting_time = 0  # Separate waiting time tracking
+            total_travel_time = 0
+            total_waiting_time = 0
             total_distance = 0
             steps = []
             num_transfers = 0
             current_line = None
+            wait_time = 0
             
-            print("\nDebug - Processing path segments:")
             for i in range(len(path) - 1):
                 edge_data = transit_graph[path[i]][path[i + 1]][0]
-                print(f"\nSegment {i+1}: {path[i]} -> {path[i + 1]}")
-                print(f"Edge data: {edge_data}")
                 
                 # Add travel time
                 segment_time = float(edge_data["travel_time"])
                 total_travel_time += segment_time
                 
-                # Track waiting time separately
+                # Track waiting time
                 if i == 0 or (current_line and current_line != edge_data["route_id"]):
                     wait_time = float(edge_data["interval"]) / 2
                     total_waiting_time += wait_time
-                    print(f"Added wait time: {wait_time:.1f} min")
-                
-                # Check if this is a transfer
-                if current_line and current_line != edge_data["route_id"]:
-                    num_transfers += 1
-                    print("Transfer point detected")
+                    if i > 0:  # Count transfers after first segment
+                        num_transfers += 1
                 
                 current_line = edge_data["route_id"]
                 
@@ -576,9 +510,8 @@ class TransportationController:
                     distance = ((start_pos[0] - end_pos[0])**2 + 
                               (start_pos[1] - end_pos[1])**2)**0.5 * 100
                     total_distance += distance
-                    print(f"Segment distance: {distance:.2f} km")
-                except Exception as e:
-                    print(f"Could not calculate distance: {e}")
+                except Exception:
+                    pass
                 
                 # Add step details
                 step = {
@@ -597,21 +530,19 @@ class TransportationController:
                     step["summary"] = f"🔄 Transfer: {step['summary']}"
                 
                 steps.append(step)
-                print(f"Added step: {step}")
             
             # Create visualization
-            print("\nDebug - Creating visualization...")
             m = folium.Map(
                 location=[30.0444, 31.2357],  # Cairo coordinates
                 zoom_start=12
             )
 
-            # Add Font Awesome to the map (needs to be added before any icons)
+            # Add Font Awesome
             m.get_root().header.add_child(folium.Element("""
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
             """))
 
-            # Create custom icons for bus and metro
+            # Create icons
             bus_icon = folium.DivIcon(
                 html='<div style="font-size: 18px; color: blue;"><i class="fa fa-bus"></i></div>',
                 icon_size=(30, 30),
@@ -624,87 +555,75 @@ class TransportationController:
                 icon_anchor=(15, 15)
             )
 
-            # Track which stops we've added icons to
+            # Track added stops
             added_stops = set()
 
-            # First, draw all route segments
-            print("\nDebug - Drawing route segments...")
+            # Draw route segments
             for i in range(len(path) - 1):
                 edge_data = transit_graph[path[i]][path[i + 1]][0]
                 color = "red" if edge_data["type"] == "metro" else "blue"
                 
-                # Get coordinates for the stops
-                from_coords = self.node_positions[path[i]]
-                to_coords = self.node_positions[path[i + 1]]
-                
-                print(f"Drawing segment from {path[i]} to {path[i + 1]}")
-                print(f"Coordinates: {from_coords} to {to_coords}")
-                
-                # Draw route segment with higher opacity
+                # Draw route line
                 folium.PolyLine(
-                    locations=[from_coords, to_coords],
+                    locations=[self.node_positions[path[i]], self.node_positions[path[i + 1]]],
                     color=color,
                     weight=4,
                     opacity=0.8,
                     popup=f"{edge_data['type'].title()} {edge_data['route_id']}"
                 ).add_to(m)
 
-            # Then add all stop markers
-            print("\nDebug - Adding stop markers...")
-            for i in range(len(path)):
-                node_id = path[i]
-                if node_id not in added_stops:
-                    coords = self.node_positions[node_id]
-                    
-                    # Determine if this is a transfer point
-                    is_transfer = False
-                    if i > 0 and i < len(path) - 1:
-                        prev_type = transit_graph[path[i-1]][path[i]][0]["type"]
-                        next_type = transit_graph[path[i]][path[i+1]][0]["type"]
-                        is_transfer = prev_type != next_type
-                    
-                    # Get the transport type for this stop
-                    if i < len(path) - 1:
-                        edge_data = transit_graph[node_id][path[i + 1]][0]
-                    else:
-                        edge_data = transit_graph[path[i-1]][node_id][0]
-                    
-                    # Choose icon based on transport type
-                    icon = metro_icon if edge_data["type"] == "metro" else bus_icon
-                    color = "red" if edge_data["type"] == "metro" else "blue"
-                    
-                    # Create popup content
-                    popup_content = f"""
-                    <div style="width: 200px;">
-                        <b>{self.get_location_name(node_id)}</b><br>
-                        {edge_data['type'].title()} Stop<br>
-                        Line: {edge_data['route_id']}<br>
-                        {'Transfer Point<br>' if is_transfer else ''}
-                        Next departure: {edge_data['interval']:.0f} min
-                    </div>
-                    """
-                    
-                    # Add marker with icon
-                    folium.Marker(
-                        location=coords,
-                        icon=icon,
-                        popup=folium.Popup(popup_content, max_width=300)
-                    ).add_to(m)
-                    
-                    # Add circle marker for visual emphasis
-                    folium.CircleMarker(
-                        location=coords,
-                        radius=10,
-                        color=color,
-                        fill=True,
-                        fill_opacity=0.3,
-                        weight=2
-                    ).add_to(m)
-                    
-                    print(f"Added marker for stop {node_id} at {coords}")
-                    added_stops.add(node_id)
+                # Add stop markers
+                for node_id in [path[i], path[i + 1]]:
+                    if node_id not in added_stops:
+                        coords = self.node_positions[node_id]
+                        
+                        # Determine if this is a transfer point
+                        is_transfer = False
+                        if i > 0 and i < len(path) - 1:
+                            prev_type = transit_graph[path[i-1]][path[i]][0]["type"]
+                            next_type = transit_graph[path[i]][path[i+1]][0]["type"]
+                            is_transfer = prev_type != next_type
+                        
+                        # Get transport type
+                        if i < len(path) - 1:
+                            edge_data = transit_graph[node_id][path[i + 1]][0]
+                        else:
+                            edge_data = transit_graph[path[i-1]][node_id][0]
+                        
+                        # Choose icon and color
+                        icon = metro_icon if edge_data["type"] == "metro" else bus_icon
+                        color = "red" if edge_data["type"] == "metro" else "blue"
+                        
+                        # Create popup
+                        popup_content = f"""
+                        <div style="width: 200px;">
+                            <b>{self.get_location_name(node_id)}</b><br>
+                            {edge_data['type'].title()} Stop<br>
+                            Line: {edge_data['route_id']}<br>
+                            {'Transfer Point<br>' if is_transfer else ''}
+                            Next departure: {edge_data['interval']:.0f} min
+                        </div>
+                        """
+                        
+                        # Add markers
+                        folium.Marker(
+                            location=coords,
+                            icon=icon,
+                            popup=folium.Popup(popup_content, max_width=300)
+                        ).add_to(m)
+                        
+                        folium.CircleMarker(
+                            location=coords,
+                            radius=10,
+                            color=color,
+                            fill=True,
+                            fill_opacity=0.3,
+                            weight=2
+                        ).add_to(m)
+                        
+                        added_stops.add(node_id)
 
-            # Add special marker for destination
+            # Add destination marker
             final_coords = self.node_positions[path[-1]]
             folium.CircleMarker(
                 location=final_coords,
@@ -716,7 +635,7 @@ class TransportationController:
                 popup="Destination: " + self.get_location_name(path[-1])
             ).add_to(m)
 
-            # Add a legend
+            # Add legend
             legend_html = """
             <div style="position: fixed; 
                         bottom: 50px; right: 50px; width: 180px; 
@@ -747,31 +666,18 @@ class TransportationController:
             """
             m.get_root().html.add_child(folium.Element(legend_html))
             
-            print("\nDebug - Route summary:")
-            print(f"Total travel time: {total_travel_time:.1f} minutes")
-            print(f"Total waiting time: {total_waiting_time:.1f} minutes")
-            print(f"Total distance: {total_distance:.2f} km")
-            print(f"Number of transfers: {num_transfers}")
-            
             return {
                 "visualization": m._repr_html_(),
                 "total_travel_time": total_travel_time,
                 "total_waiting_time": total_waiting_time,
-                "total_time": total_travel_time + total_waiting_time,  # Keep total for reference
+                "total_time": total_travel_time + total_waiting_time,
                 "total_distance": total_distance,
                 "num_transfers": num_transfers,
-                "total_cost": (total_travel_time + total_waiting_time) * 0.5,  # Cost based on total time
+                "total_cost": (total_travel_time + total_waiting_time) * 0.5,
                 "steps": steps
             }
             
         except Exception as e:
-            print(f"\nDebug - Transit route error: {str(e)}")
-            print("Debug - Source:", source)
-            print("Debug - Destination:", destination)
-            print("Debug - Available schedules:", schedules.keys() if schedules else None)
-            import traceback
-            print("Debug - Full traceback:")
-            traceback.print_exc()
             raise Exception(f"Error finding transit route: {str(e)}")
 
     def get_network_status(self) -> Dict[str, Any]:
