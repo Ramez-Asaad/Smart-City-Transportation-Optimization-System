@@ -64,19 +64,21 @@ def run_mst(source, dest, time_of_day, scenario):
     mst_results = {}
     if len(base_graph.edges()) > 0:
         # Run the MST algorithm "prim"
-        mst = prim_mst(base_graph, source)
+        mst_edges = prim_mst(base_graph, source)
+        
+        # Convert the list of edges to a NetworkX graph
+        mst = nx.Graph()
+        for u, v, data in mst_edges:
+            mst.add_edge(u, v, **data)
 
         # Add MST edges to the map
-        for u, v in mst.edges():
-            # Get edge data for popup information
-            edge_data = base_graph[u][v]
-            
+        for u, v, data in mst_edges:
             # Create detailed popup text
             popup_text = f"""
-            <b>{edge_data['name']}</b><br>
-            Distance: {edge_data['weight']:.1f} km<br>
-            Capacity: {edge_data['capacity']} vehicles/hour<br>
-            Condition: {edge_data['condition']}/10
+            <b>{data['name']}</b><br>
+            Distance: {data['weight']:.1f} km<br>
+            Capacity: {data['capacity']} vehicles/hour<br>
+            Condition: {data['condition']}/10
             """
             
             folium.PolyLine(
@@ -85,11 +87,11 @@ def run_mst(source, dest, time_of_day, scenario):
                 popup=popup_text
             ).add_to(m)
 
-        total_dist = sum(base_graph[u][v]['weight'] for u, v in mst.edges())
+        total_dist = sum(data['weight'] for _, _, data in mst_edges)
 
         mst_results["total_distance"] = total_dist
-        mst_results["num_edges"] = len(mst.edges())
-        mst_results["roads"] = [base_graph[u][v]['name'] for u, v in mst.edges()]
+        mst_results["num_edges"] = len(mst_edges)
+        mst_results["roads"] = [data['name'] for _, _, data in mst_edges]
     else:
         mst_results["warning"] = "No valid roads between neighborhoods!"
 

@@ -47,6 +47,11 @@ st.set_page_config(
 # Custom CSS for styling
 st.markdown("""
 <style>
+    /* Global styles */
+    .stApp {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
     /* Sidebar styling */
     .css-1d391kg {
         padding-top: 0;
@@ -60,16 +65,17 @@ st.markdown("""
     .logo-container {
         text-align: center;
         padding: 20px 10px;
-        border-bottom: 2px solid #262730;
+        border-bottom: 1px solid #E5D3A9;
     }
     
     .logo-image {
-        max-width: 200px;
+        max-width: 140px;
     }
-    .logo-title{    
+
+    .logo-title {    
         font-size: 28px;
-        font-weight: 700;
-        background: linear-gradient(45deg, #FF4B4B, #FF8F8F);
+        font-weight: 600;
+        background: linear-gradient(90deg, #C08A38, #E5B660);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
@@ -78,7 +84,7 @@ st.markdown("""
     
     .logo-subtitle {
         font-size: 14px;
-        color: #888;
+        color: #8C6D3F;
         text-align: center;
         margin-top: 5px;
     }
@@ -87,63 +93,90 @@ st.markdown("""
     .stButton>button {
         width: 100%;
         border: none;
-        padding: 15px 20px;
-        margin: 5px 0;
-        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 4px 0;
+        border-radius: 6px;
         cursor: pointer;
-        transition: all 0.3s;
+        transition: all 0.2s;
         display: flex;
         align-items: center;
         background-color: transparent;
-        color: #FAFAFA;
-        font-size: 16px;
+        color: #5A4214;
+        font-size: 15px;
+        letter-spacing: 0.2px;
     }
     
     .stButton>button:hover {
-        background-color: #262730;
+        background-color: #F5ECD9;
         border: none;
     }
     
     .stButton>button:active, .stButton>button:focus {
-        background-color: #FF4B4B !important;
+        background-color: #C08A38 !important;
+        color: white;
         border: none;
         box-shadow: none;
     }
     
     .stButton>button[data-active="true"] {
-        background-color: #FF4B4B !important;
+        background-color: #C08A38 !important;
+        color: white;
         border: none;
     }
     
     .menu-icon {
         margin-right: 10px;
-        font-size: 20px;
+        font-size: 18px;
     }
     
     /* Custom scrollbar */
     ::-webkit-scrollbar {
-        width: 10px;
+        width: 8px;
         background: transparent;
     }
     
     ::-webkit-scrollbar-thumb {
-        background: #FF4B4B;
-        border-radius: 5px;
+        background: #D9BD7E;
+        border-radius: 10px;
     }
     
     /* Main content styling */
     .main-title {
-        font-size: 32px;
-        font-weight: 700;
-        margin-bottom: 30px;
-        color: #FAFAFA;
+        font-size: 28px;
+        font-weight: 600;
+        margin-bottom: 24px;
+        color: #5A4214;
     }
     
     /* Card styling */
     .stCard {
-        border-radius: 15px;
-        border: none;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        border-radius: 8px;
+        border: 1px solid #E5D3A9;
+        box-shadow: 0 2px 4px rgba(192, 138, 56, 0.1);
+    }
+    
+    /* DataFrames and tables */
+    .dataframe {
+        border: 1px solid #E5D3A9;
+        border-collapse: collapse;
+    }
+    
+    .dataframe th {
+        background-color: #F5ECD9;
+        color: #5A4214;
+        font-weight: 600;
+        padding: 8px 10px;
+        border: 1px solid #E5D3A9;
+    }
+    
+    .dataframe td {
+        padding: 8px 10px;
+        border: 1px solid #E5D3A9;
+    }
+    
+    /* Metrics styling */
+    .stMetric label {
+        color: #8C6D3F !important;
     }
     
     /* Hide default button styling */
@@ -155,6 +188,33 @@ st.markdown("""
     .stButton>button:focus {
         border: none;
         box-shadow: none;
+    }
+    
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 1px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        padding: 10px 16px;
+        border-radius: 6px 6px 0 0;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #F5ECD9;
+        border-bottom: 2px solid #C08A38;
+    }
+    
+    /* Info and success messages */
+    .stAlert {
+        background-color: #FFFBF0;
+        border-left-color: #C08A38;
+    }
+    
+    /* Maps and visualizations */
+    .folium-map {
+        border: 1px solid #E5D3A9;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -202,9 +262,9 @@ with st.sidebar:
     
     # Create buttons for each menu item
     for menu_item, icon in menu_items.items():
-        button_html = f'{icon}{menu_item}'
+        button_html = f'{icon} {menu_item}'
         is_active = menu_item == current_page
-        button_style = "background-color: #FF4B4B;" if is_active else ""
+        button_style = "background-color: #C08A38; color: white;" if is_active else ""
         
         if st.button(
             button_html,
@@ -219,7 +279,7 @@ with st.sidebar:
     
     # Add system info at bottom of sidebar
     st.markdown("""
-        <div style="position: fixed; bottom: 20px; left: 20px; font-size: 12px; color: #666;">
+        <div style="position: fixed; bottom: 20px; left: 20px; font-size: 12px; color: #8C6D3F;">
             <div style="margin-bottom: 5px;">🕒 System Status: Online</div>
             <div>📡 Last Updated: Just Now</div>
         </div>

@@ -222,25 +222,75 @@ class PublicTransitOptimizer:
         for i in range(1, n + 1):
             route_id, value = values[i-1]
             for u in range(max_units + 1):
-                max_possible = min(u, max_per_route)
-                for alloc in range(min_units, max_possible + 1):
+                # Start with previous row's value (no allocation to this route)
+                dp[i][u] = dp[i-1][u]
+                
+                # Try different allocations
+                for alloc in range(min_units, min(u + 1, max_per_route + 1)):
                     # Apply diminishing returns
                     current_value = value * min(alloc, 10)
-                    if dp[i-1][u-alloc] + current_value > dp[i][u]:
+                    if u >= alloc and dp[i-1][u-alloc] + current_value > dp[i][u]:
                         dp[i][u] = dp[i-1][u-alloc] + current_value
 
         # Backtrack to find allocation
         remaining = max_units
+        total_allocated = 0
+        
         for i in range(n, 0, -1):
             route_id, value = values[i-1]
-            for alloc in range(min(remaining, max_per_route), min_units-1, -1):
-                if dp[i][remaining] == dp[i-1][remaining-alloc] + value * min(alloc, 10):
-                    allocation[route_id] = alloc
-                    remaining -= alloc
-                    break
+            best_alloc = 0
+            best_value = 0
+            
+            # Find the allocation that led to the optimal solution
+            for alloc in range(min_units, min(remaining + 1, max_per_route + 1)):
+                if remaining >= alloc:
+                    current_value = value * min(alloc, 10)
+                    if dp[i-1][remaining-alloc] + current_value == dp[i][remaining]:
+                        if current_value > best_value:
+                            best_value = current_value
+                            best_alloc = alloc
+            
+            if best_alloc > 0:
+                allocation[route_id] = best_alloc
+                remaining -= best_alloc
+                total_allocated += best_alloc
             else:
-                allocation[route_id] = min_units
-                remaining -= min_units
+                # If no allocation was found but we have minimum requirements
+                # Only allocate if we have enough remaining units
+                if remaining >= min_units:
+                    allocation[route_id] = min_units
+                    remaining -= min_units
+                    total_allocated += min_units
+                else:
+                    # Not enough remaining units for minimum allocation
+                    allocation[route_id] = 0
+        
+        # Verify we didn't exceed the maximum units
+        if total_allocated > max_units:
+            # If we somehow exceeded the allocation, scale everything down
+            total = sum(allocation.values())
+            for route_id in allocation:
+                allocation[route_id] = int((allocation[route_id] * max_units) / total)
+                
+            # Distribute any remaining units (due to rounding)
+            remaining = max_units - sum(allocation.values())
+            
+            # Create a mapping from route_id to its index in values
+            route_indices = {rid: i for i, (rid, _) in enumerate(values)}
+            
+            # Sort routes by their value
+            sorted_routes = sorted(
+                allocation.items(), 
+                key=lambda x: values[route_indices.get(x[0], 0)][1] if x[0] in route_indices else 0, 
+                reverse=True
+            )
+            
+            for route_id, _ in sorted_routes:
+                if remaining <= 0:
+                    break
+                if allocation[route_id] < max_per_route:
+                    allocation[route_id] += 1
+                    remaining -= 1
 
         return allocation
     
@@ -320,16 +370,24 @@ class PublicTransitOptimizer:
         for _, route in self.bus_routes.iterrows():
             route_id = route['RouteID']
             assigned = bus_allocation.get(route_id, 5)
+            
+            # Skip routes with zero allocation
+            if assigned <= 0:
+                continue
+                
             stops = [s.strip() for s in route['Stops'].split(',')]
             
             # Find transfer points on this route
             transfers = [stop for stop in stops if stop in self.transfer_points]
             
+            # Calculate interval - ensure we don't divide by zero
+            interval = max(5, 1080 // max(1, assigned))  # 18 operating hours
+            
             bus_schedules.append({
                 'Route': route_id,
                 'Stops': stops,
                 'Assigned Vehicles': assigned,
-                'Interval (min)': max(5, 1080 // assigned),  # 18 operating hours
+                'Interval (min)': interval,
                 'Transfer Points': transfers,
                 'Daily Capacity': assigned * 50 * 20  # 50 passengers, 20 trips
             })
@@ -338,17 +396,25 @@ class PublicTransitOptimizer:
         for _, line in self.metro_lines.iterrows():
             line_id = line['LineID']
             assigned = metro_allocation.get(line_id, 2)
+            
+            # Skip lines with zero allocation
+            if assigned <= 0:
+                continue
+                
             stations = [s.strip() for s in line['Stations'].split(',')]
             
             # Find transfer points on this line
             transfers = [station for station in stations 
                         if station in self.transfer_points]
             
+            # Calculate interval - ensure we don't divide by zero
+            interval = max(3, 1080 // max(1, assigned))  # 18 operating hours
+            
             metro_schedules.append({
                 'Line': line_id,
                 'Stations': stations,
                 'Assigned Trains': assigned,
-                'Interval (min)': max(3, 1080 // assigned),  # 18 operating hours
+                'Interval (min)': interval,
                 'Transfer Points': transfers,
                 'Daily Capacity': assigned * 500 * 20  # 500 passengers, 20 trips
             })

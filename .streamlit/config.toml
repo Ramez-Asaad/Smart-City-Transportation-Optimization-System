@@ -8,11 +8,11 @@ maxMessageSize = 200
 gatherUsageStats = false
 
 [theme]
-base = "dark"
-primaryColor = "#ff4b4b"
-backgroundColor = "#0e1117"
-secondaryBackgroundColor = "#262730"
-textColor = "#fafafa"
+base = "light"
+primaryColor = "#C08A38"
+backgroundColor = "#FFFBF0"
+secondaryBackgroundColor = "#F5ECD9"
+textColor = "#5A4214"
 font = "sans serif"
 
 [deprecation]

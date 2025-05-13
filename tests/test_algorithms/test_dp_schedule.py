@@ -1,7 +1,8 @@
 import unittest
 import pandas as pd
 import networkx as nx
-from algorithms.dp_schedule import PublicTransitOptimizer
+from unittest.mock import patch, MagicMock
+from algorithms.dp_schedule import PublicTransitOptimizer, find_transit_route
 from tests import SAMPLE_NEIGHBORHOODS, SAMPLE_ROADS, SAMPLE_FACILITIES
 
 class TestDPScheduler(unittest.TestCase):
@@ -34,6 +35,32 @@ class TestDPScheduler(unittest.TestCase):
             self.metro_lines,
             self.demand_data
         )
+        
+        # Create sample graph for transit route testing
+        self.graph = nx.Graph()
+        self.node_positions = {}
+        
+        # Add nodes and positions from sample data
+        neighborhoods = pd.DataFrame(SAMPLE_NEIGHBORHOODS)
+        facilities = pd.DataFrame(SAMPLE_FACILITIES)
+        roads = pd.DataFrame(SAMPLE_ROADS)
+        
+        for _, row in neighborhoods.iterrows():
+            self.node_positions[str(row["ID"])] = (row["Y-coordinate"], row["X-coordinate"])
+            
+        for _, row in facilities.iterrows():
+            self.node_positions[row["ID"]] = (row["Y-coordinate"], row["X-coordinate"])
+        
+        # Add edges
+        for _, row in roads.iterrows():
+            self.graph.add_edge(
+                str(row["FromID"]),
+                str(row["ToID"]),
+                weight=row["Distance(km)"],
+                capacity=row["Current Capacity(vehicles/hour)"],
+                condition=row["Condition(1-10)"],
+                name=f"Road {row['FromID']}-{row['ToID']}"
+            )
 
     def test_validate_routes(self):
         """Test route validation functionality."""
@@ -166,6 +193,59 @@ class TestDPScheduler(unittest.TestCase):
         for schedule in metro_schedules:
             for field in metro_fields:
                 self.assertIn(field, schedule)
+
+    @patch('algorithms.dp_schedule.build_map')
+    @patch('algorithms.dp_schedule.load_data')
+    def test_find_transit_route(self, mock_load_data, mock_build_map):
+        """Test transit route finding functionality."""
+        # Set up mocks to disable actual visualization
+        mock_load_data.return_value = (pd.DataFrame(SAMPLE_NEIGHBORHOODS), 
+                                      pd.DataFrame(SAMPLE_ROADS), 
+                                      pd.DataFrame(SAMPLE_FACILITIES),
+                                      None)
+        
+        # Create a mock map object
+        mock_map = MagicMock()
+        mock_map._repr_html_.return_value = "<html>Test Map</html>"
+        
+        # Set up the build_map mock to return our test data
+        mock_build_map.return_value = (mock_map, self.node_positions, None, self.graph)
+        
+        # Create test transit data
+        test_routes = {
+            'bus': pd.DataFrame({
+                'RouteID': ['B1'],
+                'Stops': ['1,2,3'],
+                'Frequency(min)': [15],
+                'DailyPassengers': [5000]
+            }),
+            'metro': pd.DataFrame({
+                'LineID': ['M1'],
+                'Stations': ['1,3'],
+                'Frequency(min)': [10],
+                'DailyPassengers': [10000]
+            })
+        }
+        
+        # Run test with mock transit data
+        with patch('algorithms.dp_schedule.get_transit_routes', return_value=test_routes):
+            visualization, results = find_transit_route("1", "3", max_transfers=1)
+            
+            # Check results structure
+            self.assertIn("total_distance", results)
+            self.assertIn("path", results)
+            self.assertIn("transit_types", results)
+            self.assertIn("transit_lines", results)
+            self.assertIn("transfers", results)
+            
+            # Verify transit path exists and is valid
+            self.assertIsNotNone(results["path"])
+            self.assertEqual(results["path"][0], "1")
+            self.assertEqual(results["path"][-1], "3")
+            
+            # Verify the basic HTML structure without checking detailed contents
+            self.assertIsInstance(visualization, str)
+            self.assertTrue(visualization.startswith("<html>"))
 
 if __name__ == '__main__':
     unittest.main()
