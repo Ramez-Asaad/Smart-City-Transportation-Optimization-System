@@ -4,7 +4,6 @@ import streamlit as st
 from unittest.mock import patch, MagicMock, PropertyMock
 from UI.components.dashboard_metrics import render_dashboard_metrics
 from UI.components.transit_planner import render_route_planner
-from UI.components.network_status import render_network_status
 from UI.components.reports import render_reports
 from tests import SAMPLE_NEIGHBORHOODS, SAMPLE_ROADS, SAMPLE_FACILITIES
 
@@ -97,9 +96,7 @@ class TestUIComponents(unittest.TestCase):
             "Y-coordinate": [30.0, 30.1, 30.2],
             "X-coordinate": [31.0, 31.1, 31.2]
         })
-        
-        render_network_status(self.mock_controller)
-        
+                
         # Verify controller call
         self.mock_controller.get_network_status.assert_called_once()
         

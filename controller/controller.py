@@ -298,7 +298,7 @@ class TransportationController:
         try:
             if algorithm == "MST":
                 algo_name = kwargs.get("mst_algorithm", "Prim")
-                visualization, results = run_mst(source, dest, time_of_day, scenario, algo_name)
+                visualization, results = run_mst(source, dest, time_of_day, scenario)
                 return {
                     "visualization": visualization,
                     "results": results,
