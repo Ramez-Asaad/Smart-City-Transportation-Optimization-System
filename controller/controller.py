@@ -3,13 +3,15 @@ import streamlit as st
 import folium
 import pandas as pd
 import numpy as np
+import time
 from algorithms.mst import run_mst
-from algorithms.time_dijkstra import run_time_dijkstra, calculate_time_weight
 from algorithms.a_star import find_nearest_hospital, run_emergency_routing
 from utils.helpers import load_data, build_map, load_transit_data
+from utils.traffic_lights import load_traffic_lights_data, calculate_traffic_light_delay, add_traffic_lights_to_map
 from collections import defaultdict
 from algorithms.dp_schedule import PublicTransitOptimizer
 import networkx as nx
+from algorithms.dijkstra import run_dijkstra
 import os
 from pathlib import Path
 
@@ -21,7 +23,7 @@ class TransportationController:
     def __init__(self):
         """Initialize the controller with data and graph structures."""
         # Load base network data
-        self.neighborhoods, self.roads, self.facilities = load_data()
+        self.neighborhoods, self.roads, self.facilities, self.traffic_lights = load_data()
         self.base_map, self.node_positions, self.neighborhood_ids, self.graph = build_map(
             self.neighborhoods, self.roads, self.facilities
         )
@@ -75,14 +77,34 @@ class TransportationController:
         if not path or len(path) < 2:
             return {}
 
+        # Get current time for traffic light calculations
+        current_time = int(time.time())
+
         analysis = {
             "total_distance": 0,
             "total_time": 0,
+            "total_traffic_light_delay": 0,
+            "traffic_lights_count": 0,
             "avg_condition": 0,
             "road_segments": [],
             "time_comparisons": {},
             "bottlenecks": []
         }
+        
+        # Define speed factors for different times of day
+        speed_factors = {
+            "Morning Rush": 0.6,  # 60% of max speed
+            "Midday": 0.9,        # 90% of max speed
+            "Evening Rush": 0.5,  # 50% of max speed 
+            "Night": 1.0          # 100% of max speed
+        }
+        
+        # Define base speeds by road condition
+        def get_speed_by_condition(condition):
+            """Calculate speed (km/h) based on road condition."""
+            base_speed = 60  # Base speed in km/h
+            # Adjust for road condition (1-10)
+            return base_speed * (0.5 + condition / 20.0)
 
         # Analyze each segment
         conditions = []
@@ -98,14 +120,55 @@ class TransportationController:
             capacity = edge_data["capacity"]
             
             # Calculate times for different periods
-            times = {
-                "Morning Rush": calculate_time_weight(edge_data, "Morning Rush"),
-                "Midday": calculate_time_weight(edge_data, "Midday"),
-                "Evening Rush": calculate_time_weight(edge_data, "Evening Rush"),
-                "Night": calculate_time_weight(edge_data, "Night")
-            }
+            times = {}
+            for period in ["Morning Rush", "Midday", "Evening Rush", "Night"]:
+                # Get the speed factor for this time period
+                speed_factor = speed_factors[period]
+                
+                # Calculate the actual speed based on road condition and time of day
+                base_speed = get_speed_by_condition(condition)
+                actual_speed = base_speed * speed_factor
+                
+                # Convert distance to time (hours), then to minutes
+                times[period] = (distance / actual_speed) * 60
             
-            current_time = times[time_of_day]
+            current_time_weight = times[time_of_day]
+            
+            # Check for traffic light 
+            has_traffic_light = edge_data.get("has_traffic_light", False)
+            traffic_light_delay = 0
+            traffic_light_status = None
+            
+            if has_traffic_light and not self.traffic_lights.empty:
+                # Calculate traffic light delay
+                traffic_light_delay = calculate_traffic_light_delay(
+                    from_id, to_id, self.traffic_lights, current_time
+                )
+                analysis["total_traffic_light_delay"] += traffic_light_delay
+                analysis["traffic_lights_count"] += 1
+                
+                # Get traffic light status for display
+                light = self.traffic_lights[
+                    ((self.traffic_lights["FromID"] == from_id) & (self.traffic_lights["ToID"] == to_id)) |
+                    ((self.traffic_lights["FromID"] == to_id) & (self.traffic_lights["ToID"] == from_id))
+                ]
+                
+                if not light.empty:
+                    light_data = light.iloc[0]
+                    cycle_time = int(light_data['CycleTime'])
+                    green_time = int(light_data['GreenTime'])
+                    yellow_time = int(light_data['YellowTime'])
+                    
+                    # Calculate current position in cycle
+                    cycle_position = current_time % cycle_time
+                    
+                    # Determine light state
+                    if cycle_position < green_time:
+                        traffic_light_status = "GREEN"
+                    elif cycle_position < (green_time + yellow_time):
+                        traffic_light_status = "YELLOW"
+                    else:
+                        traffic_light_status = "RED"
 
             # Segment analysis
             segment = {
@@ -113,28 +176,43 @@ class TransportationController:
                 "distance": distance,
                 "condition": condition,
                 "capacity": capacity,
-                "current_time": current_time,
-                "times": times
+                "current_time": current_time_weight,
+                "times": times,
+                "has_traffic_light": has_traffic_light,
+                "traffic_light_delay": traffic_light_delay,
+                "traffic_light_status": traffic_light_status
             }
             
             # Update totals
             analysis["total_distance"] += distance
-            analysis["total_time"] += current_time
+            analysis["total_time"] += current_time_weight + traffic_light_delay
             conditions.append(condition)
             
-            # Check for bottlenecks (high time difference or poor condition)
+            # Check for bottlenecks (high time difference, poor condition, or traffic light)
             is_bottleneck = False
+            bottleneck_reason = ""
             time_variance = max(times.values()) - min(times.values())
-            if time_variance > 10 or condition < 6:  # More than 10 min variance or poor condition
+            if time_variance > 10:
                 is_bottleneck = True
+                bottleneck_reason = "High traffic variance"
+            elif condition < 6:
+                is_bottleneck = True
+                bottleneck_reason = "Poor road condition"
+            elif has_traffic_light and traffic_light_status == "RED":
+                is_bottleneck = True
+                bottleneck_reason = "Red traffic light"
+                
+            if is_bottleneck:
                 analysis["bottlenecks"].append({
                     "road": road_name,
-                    "reason": "High traffic variance" if time_variance > 10 else "Poor condition",
+                    "reason": bottleneck_reason,
                     "condition": condition,
-                    "time_variance": time_variance
+                    "time_variance": time_variance,
+                    "traffic_light_status": traffic_light_status
                 })
 
             segment["is_bottleneck"] = is_bottleneck
+            segment["bottleneck_reason"] = bottleneck_reason if is_bottleneck else ""
             analysis["road_segments"].append(segment)
 
         # Calculate averages and overall metrics
@@ -142,7 +220,8 @@ class TransportationController:
         
         # Calculate time comparisons
         total_times = {
-            period: sum(seg["times"][period] for seg in analysis["road_segments"])
+            period: sum(seg["times"][period] + (seg["traffic_light_delay"] if seg["has_traffic_light"] else 0)
+                       for seg in analysis["road_segments"])
             for period in ["Morning Rush", "Midday", "Evening Rush", "Night"]
         }
         analysis["time_comparisons"] = total_times
@@ -227,9 +306,10 @@ class TransportationController:
                 }
                 
             elif algorithm == "Dijkstra":
-                avoid_congestion = kwargs.get("avoid_congestion", False)
-                visualization, results = run_time_dijkstra(
-                    source, dest, time_of_day, scenario, avoid_congestion
+                consider_road_condition = kwargs.get("consider_road_condition", False)
+                condition_weight = kwargs.get("condition_weight", 0.3)
+                visualization, results = run_dijkstra(
+                    source, dest, scenario, consider_road_condition, condition_weight
                 )
                 
                 # Add path analysis if path exists
@@ -241,7 +321,7 @@ class TransportationController:
                     "results": results,
                     "type": "path"
                 }
-                
+            
             elif algorithm == "A*":
                 hospitals = self.facilities[self.facilities["Type"].str.lower() == "medical"]
                 visualization, results = run_emergency_routing(source)
@@ -345,7 +425,7 @@ class TransportationController:
                 st.success("Route found successfully!")
                 
                 # Basic metrics
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric(
                     "Total Distance",
                     f"{analysis.get('total_distance', 0):.1f} km"
@@ -358,6 +438,10 @@ class TransportationController:
                     "Road Condition",
                     f"{analysis.get('avg_condition', 0):.1f}/10"
                 )
+                col4.metric(
+                    "Traffic Lights",
+                    str(analysis.get('traffic_lights_count', 0))
+                )
 
                 # Route Details
                 st.subheader("Route Details")
@@ -369,24 +453,51 @@ class TransportationController:
                 for i, segment in enumerate(analysis.get("road_segments", [])):
                     to_id = path[i + 1]
                     
+                    # Create traffic light indicator if present
+                    traffic_light_info = ""
+                    if segment.get('has_traffic_light', False):
+                        status = segment.get('traffic_light_status', 'UNKNOWN')
+                        color = {
+                            "GREEN": "green",
+                            "YELLOW": "orange",
+                            "RED": "red",
+                            "UNKNOWN": "gray"
+                        }.get(status, "gray")
+                        
+                        traffic_light_info = f" 🚦 <span style='color: {color};'>**{status}**</span> (+"
+                        if status == "RED":
+                            traffic_light_info += f"{segment['traffic_light_delay']:.1f} min delay)"
+                        elif status == "YELLOW":
+                            traffic_light_info += "0.5 min delay)"
+                        else:
+                            traffic_light_info += "minimal delay)"
+                    
                     # Create segment details
                     details = f"""
                     ↠ Take **{segment['road_name']}** to **{self.get_location_name(to_id)}**
                     - Distance: {segment['distance']:.1f} km
-                    - Estimated Time: {segment['current_time']:.1f} min
+                    - Estimated Time: {segment['current_time']:.1f} min{traffic_light_info}
                     - Road Condition: {segment['condition']}/10
                     """
                     
                     if segment['is_bottleneck']:
-                        details += "\n    ⚠️ **Potential bottleneck!**"
+                        details += f"\n    ⚠️ **Potential bottleneck!** ({segment['bottleneck_reason']})"
                     
-                    st.markdown(details)
+                    st.markdown(details, unsafe_allow_html=True)
                 
                 # Display destination/hospital reached
                 if results["type"] == "emergency":
                     st.write(f"🏥 Hospital reached: **{results['results']['hospital']}**")
                 else:
                     st.write(f"🏁 Destination reached: **{self.get_location_name(path[-1])}**")
+                
+                # Traffic Light Summary
+                if analysis.get("traffic_lights_count", 0) > 0:
+                    st.subheader("🚦 Traffic Light Summary")
+                    st.info(
+                        f"Your route includes {analysis['traffic_lights_count']} traffic lights with "
+                        f"an estimated total delay of {analysis['total_traffic_light_delay']:.1f} minutes."
+                    )
                 
                 # Time Analysis
                 if analysis.get("time_comparisons"):
@@ -411,12 +522,21 @@ class TransportationController:
                 if analysis.get("bottlenecks"):
                     st.subheader("⚠️ Potential Bottlenecks")
                     for bottleneck in analysis["bottlenecks"]:
-                        st.warning(
+                        warning_text = (
                             f"**{bottleneck['road']}**\n"
                             f"- Issue: {bottleneck['reason']}\n"
-                            f"- Condition: {bottleneck['condition']}/10\n"
-                            f"- Time Variance: {bottleneck['time_variance']:.1f} min"
                         )
+                        
+                        if "condition" in bottleneck:
+                            warning_text += f"- Condition: {bottleneck['condition']}/10\n"
+                        
+                        if "time_variance" in bottleneck:
+                            warning_text += f"- Time Variance: {bottleneck['time_variance']:.1f} min\n"
+                            
+                        if "traffic_light_status" in bottleneck and bottleneck["traffic_light_status"]:
+                            warning_text += f"- Traffic Light: {bottleneck['traffic_light_status']}\n"
+                        
+                        st.warning(warning_text)
     
     def get_neighborhood_names(self) -> Dict[str, str]:
         """Get mapping of neighborhood IDs to names for UI."""
@@ -429,6 +549,7 @@ class TransportationController:
         time_of_day: str,
         prefer_metro: bool = True,
         minimize_transfers: bool = True,
+        show_traffic_lights: bool = True,
         schedules: Dict = None
     ) -> Dict[str, Any]:
         """
@@ -440,6 +561,7 @@ class TransportationController:
             time_of_day: Time period for the journey
             prefer_metro: Whether to prefer metro over bus routes
             minimize_transfers: Whether to minimize number of transfers
+            show_traffic_lights: Whether to include traffic lights in route planning
             schedules: Optional pre-computed schedules
             
         Returns:
@@ -451,6 +573,11 @@ class TransportationController:
                 location=[30.0444, 31.2357],  # Cairo coordinates
                 zoom_start=12
             )
+
+            # Always add Font Awesome for consistent styling across all maps
+            m.get_root().header.add_child(folium.Element("""
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+            """))
 
             # Validate input parameters
             source = str(source).strip()
@@ -470,8 +597,8 @@ class TransportationController:
             if schedules is None:
                 schedules = self._generate_default_schedules()
 
-            # Build transit network
-            all_stops = self._build_transit_network(transit_graph, schedules)
+            # Build transit network - make sure to pass show_traffic_lights parameter
+            all_stops = self._build_transit_network(transit_graph, schedules, show_traffic_lights)
             
             # Verify route exists
             if not nx.has_path(transit_graph, source, destination):
@@ -498,11 +625,11 @@ class TransportationController:
                 if not transit_graph.has_edge(path[i], path[i + 1]):
                     raise ValueError(f"Missing edge between {path[i]} and {path[i + 1]}")
             
-            # Create visualization
-            map_html = self._create_route_visualization(m, transit_graph, path)
+            # Create visualization with explicit show_traffic_lights flag
+            map_html = self._create_route_visualization(m, transit_graph, path, show_traffic_lights)
             
             # Calculate route details
-            route_details = self._calculate_route_details(transit_graph, path)
+            route_details = self._calculate_route_details(transit_graph, path, show_traffic_lights)
             
             return {
                 "visualization": map_html,
@@ -545,10 +672,28 @@ class TransportationController:
             "metro_schedules": metro_schedules
         }
 
-    def _build_transit_network(self, transit_graph: nx.MultiGraph, schedules: Dict) -> set:
+    def _build_transit_network(self, transit_graph: nx.MultiGraph, schedules: Dict, show_traffic_lights: bool = True) -> set:
         """Build the transit network graph with bus routes and metro lines."""
         # Collect all stops and stations
         all_stops = set()
+        
+        # Load traffic lights if enabled
+        traffic_lights = None
+        if show_traffic_lights:
+            traffic_lights = self.traffic_lights
+            
+        # Get current time for traffic light state calculations
+        current_time = int(time.time())
+        
+        # Pre-process traffic lights for faster lookup
+        traffic_light_lookup = {}
+        if show_traffic_lights and not self.traffic_lights.empty:
+            for _, light in self.traffic_lights.iterrows():
+                from_id = str(light['FromID'])
+                to_id = str(light['ToID'])
+                # Store in both directions since the graph is undirected
+                traffic_light_lookup[(from_id, to_id)] = light.to_dict()
+                traffic_light_lookup[(to_id, from_id)] = light.to_dict()
         
         # Add bus routes
         for route in schedules["bus_schedules"]:
@@ -562,13 +707,52 @@ class TransportationController:
                 distance = ((start_pos[0] - end_pos[0])**2 + 
                           (start_pos[1] - end_pos[1])**2)**0.5 * 100
                 travel_time = max(5, (distance / 30) * 60)
+                
+                # Check for traffic light at this segment using the lookup
+                has_traffic_light = False
+                traffic_light_data = None
+                traffic_light_delay = 0
+                traffic_light_status = None
+                
+                if show_traffic_lights and traffic_light_lookup:
+                    # Check if there's a traffic light on this segment using lookup
+                    light_key = (stops[i], stops[i+1])
+                    if light_key in traffic_light_lookup:
+                        has_traffic_light = True
+                        traffic_light_data = traffic_light_lookup[light_key]
+                        
+                        # Calculate traffic light delay
+                        from utils.traffic_lights import calculate_traffic_light_delay
+                        traffic_light_delay = calculate_traffic_light_delay(
+                            stops[i], stops[i+1], traffic_lights, current_time
+                        )
+                        
+                        # Determine traffic light status
+                        cycle_time = int(traffic_light_data.get('CycleTime', 60))
+                        green_time = int(traffic_light_data.get('GreenTime', 30))
+                        yellow_time = int(traffic_light_data.get('YellowTime', 5))
+                        
+                        # Calculate current position in cycle
+                        cycle_position = current_time % cycle_time
+                        
+                        # Determine light state
+                        if cycle_position < green_time:
+                            traffic_light_status = "GREEN"
+                        elif cycle_position < (green_time + yellow_time):
+                            traffic_light_status = "YELLOW"
+                        else:
+                            traffic_light_status = "RED"
 
                 edge_data = {
                     "type": "bus",
                     "route_id": route["Route"],
                     "interval": float(route["Interval (min)"]),
                     "travel_time": float(travel_time),
-                    "transfer_points": route["Transfer Points"]
+                    "transfer_points": route["Transfer Points"],
+                    "has_traffic_light": has_traffic_light,
+                    "traffic_light_data": traffic_light_data,
+                    "traffic_light_delay": traffic_light_delay,
+                    "traffic_light_status": traffic_light_status
                 }
                 
                 # Add edge in both directions since it's an undirected graph
@@ -587,13 +771,52 @@ class TransportationController:
                 distance = ((start_pos[0] - end_pos[0])**2 + 
                           (start_pos[1] - end_pos[1])**2)**0.5 * 100
                 travel_time = max(3, (distance / 60) * 60)
-
+                
+                # Check for traffic light at this segment using the lookup
+                has_traffic_light = False
+                traffic_light_data = None
+                traffic_light_delay = 0
+                traffic_light_status = None
+                
+                if show_traffic_lights and traffic_light_lookup:
+                    # Metro lines can also have traffic lights at crossings
+                    light_key = (stations[i], stations[i+1])
+                    if light_key in traffic_light_lookup:
+                        has_traffic_light = True
+                        traffic_light_data = traffic_light_lookup[light_key]
+                        
+                        # Calculate traffic light delay
+                        from utils.traffic_lights import calculate_traffic_light_delay
+                        traffic_light_delay = calculate_traffic_light_delay(
+                            stations[i], stations[i+1], traffic_lights, current_time
+                        )
+                        
+                        # Determine traffic light status
+                        cycle_time = int(traffic_light_data.get('CycleTime', 60))
+                        green_time = int(traffic_light_data.get('GreenTime', 30))
+                        yellow_time = int(traffic_light_data.get('YellowTime', 5))
+                        
+                        # Calculate current position in cycle
+                        cycle_position = current_time % cycle_time
+                        
+                        # Determine light state
+                        if cycle_position < green_time:
+                            traffic_light_status = "GREEN"
+                        elif cycle_position < (green_time + yellow_time):
+                            traffic_light_status = "YELLOW"
+                        else:
+                            traffic_light_status = "RED"
+                
                 edge_data = {
                     "type": "metro",
                     "route_id": line["Line"],
                     "interval": float(line["Interval (min)"]),
                     "travel_time": float(travel_time),
-                    "transfer_points": line["Transfer Points"]
+                    "transfer_points": line["Transfer Points"],
+                    "has_traffic_light": has_traffic_light,
+                    "traffic_light_data": traffic_light_data,
+                    "traffic_light_delay": traffic_light_delay,
+                    "traffic_light_status": traffic_light_status
                 }
                 
                 # Add edge in both directions since it's an undirected graph
@@ -618,7 +841,10 @@ class TransportationController:
                     "route_id": f"Transfer at {self.get_location_name(stop)}",
                     "interval": 5,
                     "travel_time": 10,
-                    "transfer_points": [stop]
+                    "transfer_points": [stop],
+                    "has_traffic_light": False,
+                    "traffic_light_delay": 0,
+                    "traffic_light_status": None
                 }
                 transit_graph.add_edge(stop, stop, **edge_data)
         
@@ -662,34 +888,34 @@ class TransportationController:
         except Exception as e:
             raise ValueError(f"Error finding path: {str(e)}")
 
-    def _create_route_visualization(self, m: folium.Map, graph: nx.MultiGraph, path: List[str]) -> str:
+    def _create_route_visualization(self, m: folium.Map, graph: nx.MultiGraph, path: List[str], show_traffic_lights: bool) -> str:
         """Create an interactive map visualization of the route."""
         if not path or len(path) < 2:
             raise ValueError("Invalid path for visualization")
 
         # Add Font Awesome icons
         m.get_root().header.add_child(folium.Element("""
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
         """))
 
         # Create icons for stops
         bus_icon = folium.DivIcon(
-            html='<div style="font-size: 24px; color: blue;"><i class="fa fa-bus"></i></div>',
+            html='<div style="font-size: 24px; color: blue;"><i class="fas fa-bus"></i></div>',
             icon_size=(40, 40),
             icon_anchor=(20, 20)
         )
         metro_icon = folium.DivIcon(
-            html='<div style="font-size: 24px; color: red;"><i class="fa fa-subway"></i></div>',
+            html='<div style="font-size: 24px; color: red;"><i class="fas fa-subway"></i></div>',
             icon_size=(40, 40),
             icon_anchor=(20, 20)
         )
         start_icon = folium.DivIcon(
-            html='<div style="font-size: 28px; color: green;"><i class="fa fa-play-circle"></i></div>',
+            html='<div style="font-size: 28px; color: green;"><i class="fas fa-play-circle"></i></div>',
             icon_size=(40, 40),
             icon_anchor=(20, 20)
         )
         end_icon = folium.DivIcon(
-            html='<div style="font-size: 28px; color: red;"><i class="fa fa-stop-circle"></i></div>',
+            html='<div style="font-size: 28px; color: red;"><i class="fas fa-stop-circle"></i></div>',
             icon_size=(40, 40),
             icon_anchor=(20, 20)
         )
@@ -781,15 +1007,42 @@ class TransportationController:
         min_lon = min(coord[1] for coord in route_coords)
         max_lon = max(coord[1] for coord in route_coords)
         
-        # Add padding (about 10% of the route span)
-        lat_padding = (max_lat - min_lat) * 0.1
-        lon_padding = (max_lon - min_lon) * 0.1
+        # Add padding (about 15% of the route span) to ensure traffic lights are visible
+        lat_padding = (max_lat - min_lat) * 0.15
+        lon_padding = (max_lon - min_lon) * 0.15
         
         # Set bounds with padding
         m.fit_bounds([
             [min_lat - lat_padding, min_lon - lon_padding],
             [max_lat + lat_padding, max_lon + lon_padding]
         ])
+
+        # Add traffic lights to the map if requested
+        if show_traffic_lights and not self.traffic_lights.empty:
+            # Import here to avoid circular imports
+            from utils.traffic_lights import add_traffic_lights_to_map
+            current_time = int(time.time())
+            
+            # Directly add traffic lights to the map
+            print(f"Adding {len(self.traffic_lights)} traffic lights to transit map...")
+            add_traffic_lights_to_map(m, self.traffic_lights, self.node_positions, current_time)
+            
+            # Add a note about traffic lights to the legend
+            traffic_light_legend = """
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:red; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Red)</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:orange; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Yellow)</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:green; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Green)</span>
+            </div>
+            """
+            # No need to manually add the note as it will be in the legend
 
         # Add legend
         m.get_root().html.add_child(folium.Element(self._create_legend_html()))
@@ -824,7 +1077,7 @@ class TransportationController:
         if is_transfer:
             content += """
             <div style="margin-top: 10px; padding: 5px; background-color: #e8f5e9; border-radius: 5px;">
-                <i class="fa fa-exchange"></i> Transfer Point
+                <i class="fas fa-exchange-alt"></i> Transfer Point
             </div>
             """
             
@@ -843,19 +1096,19 @@ class TransportationController:
                     box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
             <h4 style="margin: 0 0 10px 0;">Route Legend</h4>
             <div style="margin-bottom: 8px;">
-                <i class="fa fa-play-circle" style="color:green; font-size: 18px;"></i>
+                <i class="fas fa-play-circle" style="color:green; font-size: 18px;"></i>
                 <span style="margin-left: 8px;">Start Point</span>
             </div>
             <div style="margin-bottom: 8px;">
-                <i class="fa fa-stop-circle" style="color:red; font-size: 18px;"></i>
+                <i class="fas fa-stop-circle" style="color:red; font-size: 18px;"></i>
                 <span style="margin-left: 8px;">End Point</span>
             </div>
             <div style="margin-bottom: 8px;">
-                <i class="fa fa-bus" style="color:blue; font-size: 18px;"></i>
+                <i class="fas fa-bus" style="color:blue; font-size: 18px;"></i>
                 <span style="margin-left: 8px;">Bus Stop</span>
             </div>
             <div style="margin-bottom: 8px;">
-                <i class="fa fa-subway" style="color:red; font-size: 18px;"></i>
+                <i class="fas fa-subway" style="color:red; font-size: 18px;"></i>
                 <span style="margin-left: 8px;">Metro Station</span>
             </div>
             <div style="margin-bottom: 8px;">
@@ -866,14 +1119,26 @@ class TransportationController:
                 <hr style="border: 8px solid red; display: inline-block; width: 30px; margin-right: 8px;">
                 <span>Metro Line</span>
             </div>
-            <div>
-                <i class="fa fa-exchange" style="color:green; font-size: 18px;"></i>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-exchange-alt" style="color:green; font-size: 18px;"></i>
                 <span style="margin-left: 8px;">Transfer Point</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:red; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Red)</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:orange; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Yellow)</span>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <i class="fas fa-traffic-light" style="color:green; font-size: 18px;"></i>
+                <span style="margin-left: 8px;">Traffic Light (Green)</span>
             </div>
         </div>
         """
 
-    def _calculate_route_details(self, graph: nx.MultiGraph, path: List[str]) -> Dict[str, Any]:
+    def _calculate_route_details(self, graph: nx.MultiGraph, path: List[str], show_traffic_lights: bool) -> Dict[str, Any]:
         """Calculate detailed metrics for the route."""
         total_travel_time = 0
         total_waiting_time = 0

@@ -168,7 +168,8 @@ current_page = st.query_params["page"]
 if 'controller' not in st.session_state:
     st.session_state.controller = TransportationController()
 
-neighborhoods, roads, facilities = load_data()
+# Load base network data
+neighborhoods, roads, facilities, traffic_lights = load_data()
 
 # Initialize traffic simulator if not in session state
 if 'traffic_simulator' not in st.session_state:
@@ -260,20 +261,294 @@ if current_page == "Dashboard":
 elif current_page == "Data":
     st.markdown('<h1 class="main-title">Data Management</h1>', unsafe_allow_html=True)
     
+    # Create helper functions to translate IDs to names
+    def get_translated_neighborhoods(neighborhoods_df):
+        """Returns a copy of the dataframe with readable names for display"""
+        df = neighborhoods_df.copy()
+        return df
+    
+    def get_translated_roads(roads_df, neighborhood_names):
+        """Returns a copy of the roads dataframe with readable names"""
+        df = roads_df.copy()
+        # Add columns with translated names
+        df['From Location'] = df['FromID'].apply(lambda x: f"{x} - {neighborhood_names.get(str(x), 'Unknown')}" if str(x) in neighborhood_names else x)
+        df['To Location'] = df['ToID'].apply(lambda x: f"{x} - {neighborhood_names.get(str(x), 'Unknown')}" if str(x) in neighborhood_names else x)
+        # Reorder columns to show translated names first
+        cols = df.columns.tolist()
+        cols = ['Name', 'From Location', 'To Location'] + [col for col in cols if col not in ['Name', 'From Location', 'To Location']]
+        return df[cols]
+    
+    def get_translated_facilities(facilities_df):
+        """Returns a copy of the facilities dataframe with readable names"""
+        df = facilities_df.copy()
+        return df
+    
+    def get_translated_traffic_lights(traffic_lights_df, neighborhood_names):
+        """Returns a copy of the traffic lights dataframe with readable names"""
+        df = traffic_lights_df.copy()
+        if not df.empty:
+            # Add columns with translated names
+            df['From Location'] = df['FromID'].apply(lambda x: f"{x} - {neighborhood_names.get(str(x), 'Unknown')}" if str(x) in neighborhood_names else x)
+            df['To Location'] = df['ToID'].apply(lambda x: f"{x} - {neighborhood_names.get(str(x), 'Unknown')}" if str(x) in neighborhood_names else x)
+            # Reorder columns
+            cols = df.columns.tolist()
+            cols = ['ID', 'IntersectionID', 'From Location', 'To Location'] + [col for col in cols if col not in ['ID', 'IntersectionID', 'From Location', 'To Location', 'FromID', 'ToID']]
+            return df[cols]
+        return df
+    
+    def get_translated_bus_routes(bus_routes_df, neighborhood_names):
+        """Returns a copy of the bus routes dataframe with translated stop names"""
+        df = bus_routes_df.copy()
+        if not df.empty and 'Stops' in df.columns:
+            # Create a new column with translated stop names
+            df['Translated Stops'] = df['Stops'].apply(
+                lambda stops: ', '.join([
+                    f"{stop.strip()} - {neighborhood_names.get(stop.strip(), 'Unknown')}" 
+                    for stop in str(stops).split(',')
+                    if stop.strip() in neighborhood_names
+                ]) if stops else ''
+            )
+            # Reorder columns
+            cols = df.columns.tolist()
+            new_cols = ['RouteID', 'Translated Stops'] + [col for col in cols if col not in ['RouteID', 'Translated Stops', 'Stops']]
+            return df[new_cols]
+        return df
+    
+    def get_translated_metro_lines(metro_lines_df, neighborhood_names):
+        """Returns a copy of the metro lines dataframe with translated station names"""
+        df = metro_lines_df.copy()
+        if not df.empty and 'Stations' in df.columns:
+            # Create a new column with translated station names
+            df['Translated Stations'] = df['Stations'].apply(
+                lambda stations: ', '.join([
+                    f"{station.strip()} - {neighborhood_names.get(station.strip(), 'Unknown')}"
+                    for station in str(stations).split(',')
+                    if station.strip() in neighborhood_names
+                ]) if stations else ''
+            )
+            # Reorder columns
+            cols = df.columns.tolist()
+            new_cols = ['LineID', 'Translated Stations'] + [col for col in cols if col not in ['LineID', 'Translated Stations', 'Stations']]
+            return df[new_cols]
+        return df
+    
+    # Get neighborhood names for translation
+    neighborhood_names = st.session_state.controller.get_neighborhood_names()
+    
     # Create tabs for different data views
-    data_tabs = st.tabs(["Neighborhoods", "Roads", "Facilities"])
+    data_tabs = st.tabs(["Neighborhoods", "Roads", "Facilities", "Traffic Lights", "Bus Routes", "Metro Lines"])
     
     with data_tabs[0]:
         st.subheader("Neighborhoods Data")
-        st.dataframe(neighborhoods, use_container_width=True)
+        translated_neighborhoods = get_translated_neighborhoods(neighborhoods)
+        
+        # Add view toggle
+        view_raw = st.checkbox("View Raw Data", key="neighborhoods_raw", value=False)
+        display_df = neighborhoods if view_raw else translated_neighborhoods
+        
+        st.dataframe(display_df, use_container_width=True)
+        
+        # Add download button for neighborhoods data
+        csv = neighborhoods.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Neighborhoods Data",
+            data=csv,
+            file_name="neighborhoods.csv",
+            mime="text/csv"
+        )
         
     with data_tabs[1]:
         st.subheader("Roads Data")
-        st.dataframe(roads, use_container_width=True)
+        translated_roads = get_translated_roads(roads, neighborhood_names)
+        
+        # Add view toggle
+        view_raw = st.checkbox("View Raw Data", key="roads_raw", value=False)
+        display_df = roads if view_raw else translated_roads
+        
+        st.dataframe(display_df, use_container_width=True)
+        
+        # Add download button for roads data
+        csv = roads.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Roads Data",
+            data=csv,
+            file_name="roads.csv",
+            mime="text/csv"
+        )
         
     with data_tabs[2]:
         st.subheader("Facilities Data")
-        st.dataframe(facilities, use_container_width=True)
+        translated_facilities = get_translated_facilities(facilities)
+        
+        # Add view toggle
+        view_raw = st.checkbox("View Raw Data", key="facilities_raw", value=False)
+        display_df = facilities if view_raw else translated_facilities
+        
+        st.dataframe(display_df, use_container_width=True)
+        
+        # Add download button for facilities data
+        csv = facilities.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download Facilities Data",
+            data=csv,
+            file_name="facilities.csv",
+            mime="text/csv"
+        )
+        
+    with data_tabs[3]:
+        st.subheader("Traffic Lights Data")
+        # Display traffic lights data with explanation
+        st.info("Traffic lights are placed at intersections and regulate traffic flow. Each traffic light follows a cycle pattern of green, yellow, and red phases.")
+        
+        # Translate traffic lights data
+        translated_traffic_lights = get_translated_traffic_lights(traffic_lights, neighborhood_names)
+        
+        # Add view toggle
+        view_raw = st.checkbox("View Raw Data", key="traffic_lights_raw", value=False)
+        display_df = traffic_lights if view_raw else translated_traffic_lights
+        
+        # Add search box for traffic lights
+        if not traffic_lights.empty:
+            search_term = st.text_input("🔍 Search Traffic Lights", key="traffic_lights_search")
+            if search_term:
+                # Filter the dataframe based on search term
+                filtered_data = display_df[
+                    display_df.astype(str).apply(
+                        lambda row: row.str.contains(search_term, case=False).any(),
+                        axis=1
+                    )
+                ]
+                st.dataframe(filtered_data, use_container_width=True)
+            else:
+                st.dataframe(display_df, use_container_width=True)
+        else:
+            st.dataframe(display_df, use_container_width=True)
+        
+        # Add download button for traffic lights data
+        if not traffic_lights.empty:
+            csv = traffic_lights.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download Traffic Lights Data",
+                data=csv,
+                file_name="traffic_lights.csv",
+                mime="text/csv"
+            )
+        
+        # Add visualization metrics
+        if not traffic_lights.empty:
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+            metrics_col1.metric("Total Traffic Lights", len(traffic_lights))
+            
+            # Calculate average cycle times
+            avg_cycle = traffic_lights["CycleTime"].mean()
+            avg_green = traffic_lights["GreenTime"].mean()
+            
+            metrics_col2.metric("Avg. Cycle Time", f"{avg_cycle:.1f}s")
+            metrics_col3.metric("Avg. Green Time", f"{avg_green:.1f}s")
+    
+    with data_tabs[4]:
+        st.subheader("Bus Routes Data")
+        # Load bus routes data
+        try:
+            # Get bus routes directly from controller
+            bus_routes = st.session_state.controller.bus_routes
+            
+            if not bus_routes.empty:
+                st.info("Bus routes connect neighborhoods and facilities with scheduled services.")
+                
+                # Translate bus routes data
+                translated_bus_routes = get_translated_bus_routes(bus_routes, neighborhood_names)
+                
+                # Add view toggle
+                view_raw = st.checkbox("View Raw Data", key="bus_routes_raw", value=False)
+                display_df = bus_routes if view_raw else translated_bus_routes
+                
+                # Add search box for bus routes
+                search_term = st.text_input("🔍 Search Bus Routes", key="bus_routes_search")
+                if search_term:
+                    # Filter the dataframe based on search term
+                    filtered_data = display_df[
+                        display_df.astype(str).apply(
+                            lambda row: row.str.contains(search_term, case=False).any(),
+                            axis=1
+                        )
+                    ]
+                    st.dataframe(filtered_data, use_container_width=True)
+                else:
+                    st.dataframe(display_df, use_container_width=True)
+                
+                # Add download button for bus routes data
+                csv = bus_routes.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Bus Routes Data",
+                    data=csv,
+                    file_name="bus_routes.csv",
+                    mime="text/csv"
+                )
+                
+                # Add metrics
+                metrics_col1, metrics_col2 = st.columns(2)
+                metrics_col1.metric("Total Bus Routes", len(bus_routes))
+                
+                # Calculate total stops
+                total_stops = sum(len(str(route).split(',')) for route in bus_routes["Stops"] if route)
+                metrics_col2.metric("Total Bus Stops", total_stops)
+            else:
+                st.warning("No bus routes data available.")
+        except Exception as e:
+            st.error(f"Error loading bus routes data: {str(e)}")
+    
+    with data_tabs[5]:
+        st.subheader("Metro Lines Data")
+        # Load metro lines data
+        try:
+            # Get metro lines directly from controller
+            metro_lines = st.session_state.controller.metro_lines
+            
+            if not metro_lines.empty:
+                st.info("Metro lines provide rapid transit between major stations with higher capacity than bus routes.")
+                
+                # Translate metro lines data
+                translated_metro_lines = get_translated_metro_lines(metro_lines, neighborhood_names)
+                
+                # Add view toggle
+                view_raw = st.checkbox("View Raw Data", key="metro_lines_raw", value=False)
+                display_df = metro_lines if view_raw else translated_metro_lines
+                
+                # Add search box for metro lines
+                search_term = st.text_input("🔍 Search Metro Lines", key="metro_lines_search")
+                if search_term:
+                    # Filter the dataframe based on search term
+                    filtered_data = display_df[
+                        display_df.astype(str).apply(
+                            lambda row: row.str.contains(search_term, case=False).any(),
+                            axis=1
+                        )
+                    ]
+                    st.dataframe(filtered_data, use_container_width=True)
+                else:
+                    st.dataframe(display_df, use_container_width=True)
+                
+                # Add download button for metro lines data
+                csv = metro_lines.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Metro Lines Data",
+                    data=csv,
+                    file_name="metro_lines.csv",
+                    mime="text/csv"
+                )
+                
+                # Add metrics
+                metrics_col1, metrics_col2 = st.columns(2)
+                metrics_col1.metric("Total Metro Lines", len(metro_lines))
+                
+                # Calculate total stations
+                total_stations = sum(len(str(line).split(',')) for line in metro_lines["Stations"] if line)
+                metrics_col2.metric("Total Metro Stations", total_stations)
+            else:
+                st.warning("No metro lines data available.")
+        except Exception as e:
+            st.error(f"Error loading metro lines data: {str(e)}")
 
 elif current_page == "Reports":
     st.markdown('<h1 class="main-title">Analytics & Reports</h1>', unsafe_allow_html=True)

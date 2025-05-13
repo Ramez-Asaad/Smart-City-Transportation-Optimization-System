@@ -20,7 +20,7 @@ class PublicTransitOptimizer:
             demand_data: Dictionary mapping (from_id, to_id) to daily passenger count
         """
         # Load base network data
-        self.neighborhoods, self.roads, self.facilities = load_data()
+        self.neighborhoods, self.roads, self.facilities, self.traffic_lights = load_data()
         self.base_map, self.node_positions, _, self.base_graph = build_map(
             self.neighborhoods, self.roads, self.facilities
         )

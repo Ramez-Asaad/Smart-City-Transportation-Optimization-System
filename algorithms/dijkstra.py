@@ -86,7 +86,7 @@ def run_dijkstra(
         Tuple[str, Dict]: HTML string of map visualization and results dict
     """
     # Load and build the graph
-    neighborhoods, roads, facilities = load_data()
+    neighborhoods, roads, facilities, traffic_lights = load_data()
     m, node_positions, _, graph = build_map(neighborhoods, roads, facilities, scenario)
     
     # Run the algorithm

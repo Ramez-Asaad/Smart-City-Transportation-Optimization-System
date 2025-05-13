@@ -54,7 +54,7 @@ def run_mst(source, dest, time_of_day, scenario):
         Tuple[str, Dict]: HTML string of map visualization and results dictionary
     """
     # Load data
-    neighborhoods, roads, facilities = load_data()
+    neighborhoods, roads, facilities, traffic_lights = load_data()
     
     # Build base map and get graph components
     m, node_positions, neighborhood_ids_str, base_graph = build_map(

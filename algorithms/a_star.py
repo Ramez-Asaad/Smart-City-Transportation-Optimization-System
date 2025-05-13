@@ -230,7 +230,7 @@ def run_emergency_routing(source_id):
         Tuple[str, Dict]: HTML string of map visualization and results dictionary
     """
     # Load and build the graph
-    neighborhoods, roads, facilities = load_data()
+    neighborhoods, roads, facilities, traffic_lights = load_data()
     m, node_positions, _, graph = build_map(neighborhoods, roads, facilities)
     
     # Filter for hospitals
