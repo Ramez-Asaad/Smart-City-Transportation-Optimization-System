@@ -38,7 +38,7 @@ else:
 
 # Set page config with custom theme
 st.set_page_config(
-    page_title="CityWise",
+    page_title="GreedyMinds",
     page_icon=favicon,
     layout="wide",
     initial_sidebar_state="expanded"
@@ -183,7 +183,7 @@ with st.sidebar:
     if os.path.exists(logo_path):
         st.markdown("""
             <div class="logo-container">
-                <img src="data:image/png;base64,{}" class="logo-image" alt="CityWise Logo">
+                <img src="data:image/png;base64,{}" class="logo-image" alt="GreedyMinds Logo">
                 <div class="logo-title">CityWise</div>
                 <div class="logo-subtitle">Smart Urban Transportation</div>
             </div>
