@@ -29,15 +29,11 @@ def render_driving_assist(controller) -> None:
             key="driving_time"
         )
         
-        scenario = st.text_input(
-            "Scenario Options (e.g., Road Closure ID)",
-            key="driving_scenario"
-        )
         
         col1, col2 = st.columns(2)
         algo = col1.selectbox(
             "Algorithm",
-            ["Dijkstra", "Time-Aware Dijkstra", "A*", "MST"],
+            ["Dijkstra", "A*", "MST"],
             key="driving_algo"
         )
         
@@ -63,21 +59,16 @@ def render_driving_assist(controller) -> None:
                 
                 if algo == "MST":
                     results = controller.run_algorithm(
-                        "MST", source, dest, time_of_day, scenario,
+                        "MST", source, dest, time_of_day, 
                         mst_algorithm="Prim"
-                    )
-                elif algo == "Time-Aware Dijkstra":
-                    results = controller.run_algorithm(
-                        "Dijkstra", source, dest, time_of_day, scenario,
-                        avoid_congestion=True
                     )
                 elif algo == "A*":
                     results = controller.run_algorithm(
-                        "A*", source, None, time_of_day, scenario
+                        "A*", source, None, time_of_day
                     )
                 else:  # Basic Dijkstra
                     results = controller.run_algorithm(
-                        "Dijkstra", source, dest, time_of_day, scenario,
+                        "Dijkstra", source, dest, time_of_day, 
                         **kwargs
                     )
                 

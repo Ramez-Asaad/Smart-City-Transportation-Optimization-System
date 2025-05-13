@@ -60,6 +60,7 @@ def a_star(graph, start, goal, node_positions):
             # Use distance as the cost
             cost = edge_data['weight']
             
+            # Calculate the cost to reach the neighbor node from the start node via the current node
             tentative_g = g_score[current] + cost
             
             if tentative_g < g_score.get(neighbor, float('inf')):

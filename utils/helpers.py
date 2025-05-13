@@ -185,6 +185,7 @@ def calculate_distance(pos1, pos2):
     return ((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)**0.5
 
 def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=True):
+
     """
     Builds a base map with all components that can be reused across different algorithms.
     
@@ -300,3 +301,22 @@ def build_map(neighborhoods, roads, facilities, scenario=None, show_facilities=T
         
     except Exception as e:
         raise Exception(f"Error building map: {str(e)}")
+    
+def simple_shortest_path_length(graph, start, end, weight='weight'):
+    import heapq
+    distances = {node: float('inf') for node in graph.nodes()}
+    distances[start] = 0
+    pq = [(0, start)]
+    while pq:
+        dist, node = heapq.heappop(pq)
+        if node == end:
+            return dist
+        if dist > distances[node]:
+            continue
+        for neighbor in graph.neighbors(node):
+            edge_weight = graph[node][neighbor].get(weight, 1)
+            new_dist = dist + edge_weight
+            if new_dist < distances[neighbor]:
+                distances[neighbor] = new_dist
+                heapq.heappush(pq, (new_dist, neighbor))
+    return float('inf')

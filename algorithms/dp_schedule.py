@@ -1,7 +1,7 @@
 import pandas as pd
 import networkx as nx
 import folium
-from utils.helpers import load_data, build_map, load_transit_data
+from utils.helpers import load_data, build_map, load_transit_data, simple_shortest_path_length
 from typing import Dict, List, Tuple, Any
 from collections import defaultdict
 
@@ -126,12 +126,8 @@ class PublicTransitOptimizer:
                 if start_pos and end_pos:
                     try:
                         # Calculate distance using existing road network if possible
-                        distance = nx.shortest_path_length(
-                            self.base_graph,
-                            str(stops[i]),
-                            str(stops[i+1]),
-                            weight='weight'
-                        )
+                        distance = simple_shortest_path_length(self.base_graph, stops[i], stops[i+1], weight='weight')
+                    
                     except Exception:
                         # If no road path exists, use direct distance
                         distance = ((start_pos[0] - end_pos[0])**2 + 

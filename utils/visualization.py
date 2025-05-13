@@ -105,7 +105,7 @@ class TrafficVisualizer:
         <div style="position: fixed; 
                     bottom: 50px; right: 50px; 
                     border:2px solid grey; z-index:9999; 
-                    background-color:white;
+                    background-color:black;
                     padding: 10px;
                     font-size:14px;
                     opacity: 0.8">
@@ -210,7 +210,7 @@ class TrafficVisualizer:
         m = self.create_base_map()
         self.add_traffic_layer(m)
         self.add_legend(m)
-        st_folium(m, height=500)
+        st_folium(m, height=800)
         
         # Add refresh button with loading animation
         if st.button("↻ Refresh Traffic Data", help="Generate new traffic patterns"):
