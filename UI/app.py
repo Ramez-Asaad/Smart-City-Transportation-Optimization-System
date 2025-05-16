@@ -38,7 +38,7 @@ else:
 
 # Set page config with custom theme
 st.set_page_config(
-    page_title="GreedyMinds",
+    page_title="CityWise",
     page_icon=favicon,
     layout="wide",
     initial_sidebar_state="expanded"
