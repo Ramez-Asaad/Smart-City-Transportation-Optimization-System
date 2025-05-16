@@ -1,199 +1,147 @@
-Public Transit Optimization System Documentation
-System Architecture and Design Decisions
-Architecture Overview
-The system follows a modular architecture with these key components:
+# Smart City Transportation Optimization System
 
-Data Layer: Handles input data processing (bus routes, metro lines, demand data)
+**CityWise**: A Streamlit-powered platform for urban mobility analytics, route planning, and public transit optimization in smart cities.
 
-Network Modeling: Constructs a multimodal transportation graph
+---
 
-Optimization Engine: Contains algorithms for transfer point optimization and resource allocation
+## Overview
 
-Scheduling Module: Generates timetables based on optimization results
+CityWise is an interactive web application designed to optimize urban transportation networks. It provides advanced route planning for both public transit and private vehicles, dynamic schedule optimization, real-time network analytics, and comprehensive infrastructure reports. The system leverages modern algorithms (Dijkstra, A*, Minimum Spanning Tree, Dynamic Programming) and rich visualizations to support city planners, commuters, and researchers.
 
-Visualization Interface: Provides interactive network maps and results display
+---
 
-Key Design Decisions
-Multimodal Network Representation:
+## Features
 
-Uses NetworkX graph structure to model both bus and metro systems
+- **Route Planning**
+  - **Public Transit Planner**: Find optimal routes using integrated bus and metro networks, with options to prefer metro or minimize transfers. Visualizes routes, transfer points, and traffic lights.
+  - **Driving Assist**: Plan driving routes using Dijkstra, A*, and MST algorithms, considering road conditions, traffic lights, and real-time scenarios (e.g., road closures, rush hour).
 
-Edges contain metadata about route type, capacity, and identifiers
+- **Schedule Optimization**
+  - Dynamic programming-based allocation of buses and trains to maximize network efficiency and meet demand.
+  - Generates optimized schedules and visualizes resource allocation.
 
-Nodes represent physical stops/stations
+- **Network Analytics & Reports**
+  - Interactive dashboards for infrastructure, population, connectivity, and facilities.
+  - Visual and statistical reports using Plotly and Folium.
 
-Optimization Approach:
+- **Network Status**
+  - Real-time simulation and visualization of traffic, bus, and metro networks.
+  - Color-coded maps for bus routes and metro lines with legends.
 
-Hybrid optimization combining:
+- **Data Management**
+  - Explore, search, and download all core datasets (neighborhoods, roads, facilities, bus routes, metro lines, traffic lights).
 
-Scoring system for transfer points
+---
 
-Dynamic programming for resource allocation
+## Tech Stack
 
-Constraint-based scheduling
+- **Frontend/UI**: [Streamlit](https://streamlit.io/), [streamlit-folium](https://github.com/randyzwitch/streamlit-folium)
+- **Data Processing**: [pandas](https://pandas.pydata.org/), [numpy](https://numpy.org/)
+- **Graph Algorithms**: [networkx](https://networkx.org/)
+- **Mapping & Visualization**: [folium](https://python-visualization.github.io/folium/), [plotly](https://plotly.com/python/)
+- **Other**: [fontawesome-markdown](https://pypi.org/project/fontawesome-markdown/), [pathlib](https://docs.python.org/3/library/pathlib.html)
 
-Performance Considerations:
+---
 
-Pre-computes demand and connectivity metrics
+## Project Structure
 
-Uses simplified DP when exact solution is computationally expensive
+```
+Smart-City-Transportation-Optimization-System/
+│
+├── UI/
+│   ├── app.py                # Main Streamlit app (modularized)
+│   └── components/           # UI components (transit planner, reports, maps, etc.)
+│
+├── algorithms/               # Routing and optimization algorithms (Dijkstra, A*, MST, DP)
+├── controller/               # Main controller for data, logic, and orchestration
+├── utils/                    # Helper functions, data loaders, traffic light logic, visualization
+├── data/                     # CSV data files (neighborhoods, roads, facilities, transit, etc.)
+├── tests/                    # Unit tests for algorithms and components
+├── requirements.txt          # Python dependencies
+├── main.py                   # Entry point (verifies data, launches app)
+└── .streamlit/               # Streamlit configuration
+```
 
-Implements diminishing returns for vehicle allocation
+---
 
-Algorithm Implementations and Modifications
-1. Transfer Point Optimization Algorithm
-Implementation:
-def optimize_transfer_points(self):
-    transfer_scores = []
-    for point in self.transfer_points:
-        # Calculate connectivity score
-        degree = self.network.degree(point)
-        
-        # Calculate demand score
-        demand_in = sum(self.demand_data.get((src, point), 0) for src in self.network.nodes())
-        demand_out = sum(self.demand_data.get((point, dest), 0) for dest in self.network.nodes())
-        
-        # Calculate transfer efficiency
-        transfer_efficiency = 0
-        neighbors = list(self.network.neighbors(point))
-        for i in range(len(neighbors)):
-            for j in range(i+1, len(neighbors)):
-                if self.network[point][neighbors[i]]['type'] != self.network[point][neighbors[j]]['type']:
-                    transfer_efficiency += 1
-        
-        score = 0.4*(degree) + 0.3*(demand_in + demand_out)/1000 + 0.3*transfer_efficiency
-        transfer_scores.append((point, score))
+## Getting Started
 
-Modifications:
+### 1. Prerequisites
 
-Added transfer efficiency metric to prioritize points with more intermodal connections
+- Python 3.9 or higher
+- All required data files in the `data/` directory:
+  - `neighborhoods.csv`
+  - `roads.csv`
+  - `facilities.csv`
+  - `bus_routes.csv`
+  - `metro_lines.csv`
+  - `demand_data.csv`
 
-Used weighted scoring to balance connectivity and demand
+### 2. Installation
 
-Normalized demand values to prevent dominance by any single factor
+Clone the repository and install dependencies:
 
-2. Resource Allocation Algorithm
-Implementation:
-def _dp_allocate(self, values, max_units, min_units, max_per_route):
-    n = len(values)
-    dp = [[0] * (max_units + 1) for _ in range(n + 1)]
-    
-    for i in range(1, n + 1):
-        route_id, value = values[i-1]
-        for u in range(max_units + 1):
-            max_possible = min(u, max_per_route)
-            for alloc in range(min_units, max_possible + 1):
-                current_value = value * min(alloc, 10)  # Diminishing returns
-                if dp[i-1][u-alloc] + current_value > dp[i][u]:
-                    dp[i][u] = dp[i-1][u-alloc] + current_value
+```bash
+git clone https://github.com/ramez-asaad/Smart-City-Transportation-Optimization-System.git
+cd Smart-City-Transportation-Optimization-System
+pip install -r requirements.txt
+```
 
+### 3. Running the App
 
-Modifications:
+```bash
+streamlit run main.py
+```
 
-Added constraints for minimum/maximum vehicles per route
+The app will open in your browser. If any required data files are missing, you’ll be prompted to add them.
 
-Implemented diminishing returns (capped at 10 vehicles)
+---
 
-Simplified DP table to handle larger problem sizes
+## Usage
 
-Added backtracking to reconstruct allocation
+- **Dashboard**: View city metrics, plan routes, simulate network status, and optimize schedules.
+- **Data**: Browse, search, and download all datasets.
+- **Reports**: Access analytics and visual reports on infrastructure, population, and connectivity.
 
-Complexity Analysis
-Component	Time Complexity	Space Complexity	Notes
-Network Construction	O(B + M)	O(V + E)	B=bus stops, M=metro stations
-Transfer Point Identification	O(V + E)	O(V)	V=vertices, E=edges
-Transfer Point Optimization	O(V * k²)	O(V)	k=average degree
-Resource Allocation (DP)	O(n * U * r)	O(n * U)	n=routes, U=units, r=max_per_route
-Schedule Generation	O(B + M)	O(B + M)	Linear in number of stops
-Key Observations:
+---
 
-Transfer point optimization is the most computationally intensive step
+## Customization
 
-DP allocation complexity grows with total vehicles but remains practical
+- **Data**: Replace or update CSV files in the `data/` directory to reflect your city or scenario.
+- **Algorithms**: Extend or modify algorithms in the `algorithms/` folder for custom routing or optimization logic.
+- **UI**: Adjust or add UI components in `UI/components/` for new features or visualizations.
 
-Network operations scale linearly with system size
+---
 
-Performance Evaluation
-Test Case: Medium City Network
-50 bus routes, 5 metro lines
+## Testing
 
-300 stops/stations total
+Unit tests are provided for core algorithms. To run tests:
 
-200 buses, 30 trains available
+```bash
+python -m unittest discover tests
+```
 
-Results:
+---
 
-Metric	Before Optimization	After Optimization	Improvement
-Average Transfer Wait Time	12.5 min	8.2 min	34%
-Daily Passenger Capacity	1.2M	1.8M	50%
-Vehicle Utilization	68%	92%	35%
-Worst-case Travel Time	95 min	72 min	24%
-Performance Comparison Chart
+## Contributing
 
-Visualization:
-Optimized Network Map
+Contributions are welcome! Please open issues or submit pull requests for bug fixes, new features, or improvements.
 
-Challenges and Solutions
-Challenge: Scalability of exact DP solution
+---
 
-Solution: Implemented simplified DP with constraints and diminishing returns
+## License
 
-Challenge: Modeling real-world transfer behavior
+This project is licensed under the MIT License.
 
-Solution: Added transfer efficiency metric to scoring system
+---
 
-Challenge: Visualizing complex multimodal networks
+## Acknowledgments
 
-Solution: Used Folium with layered visualization (bus/metro/transfers)
+- Inspired by real-world urban mobility challenges.
+- Built with open-source libraries and data science tools.
 
-Challenge: Balancing competing optimization objectives
+---
 
-Solution: Weighted scoring system with configurable parameters
+**CityWise** – Smart Urban Transportation for the Cities of Tomorrow.
 
-Future Improvements
-Algorithm Enhancements:
-
-Implement genetic algorithm for multi-objective optimization
-
-Add real-time adjustment capabilities
-
-Incorporate traffic pattern data
-
-System Features:
-
-Add pedestrian routing between transfer points
-
-Include micro-mobility options (bikes/scooters)
-
-Implement disruption scenario modeling
-
-Performance:
-
-Parallelize transfer point scoring
-
-Implement incremental network updates
-
-Add GPU acceleration for large-scale optimization
-
-User Experience:
-
-Interactive "what-if" scenario tools
-
-Historical performance tracking
-
-Multi-criteria optimization controls
-
-Conclusion
-The public transit optimization system provides a comprehensive solution for modern urban transportation planning. By combining graph theory, dynamic programming, and constraint-based optimization, it delivers measurable improvements in key performance metrics. The modular design allows for future expansion while maintaining computational efficiency for real-world deployment scenarios.
-
-Recommendations for Production Deployment:
-
-Start with pilot implementation on select routes
-
-Gradually incorporate real-time data feeds
-
-Establish feedback loop with transit operators
-
-Develop continuous improvement process based on actual performance data      
-
-   
+---
