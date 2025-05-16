@@ -90,7 +90,7 @@ pip install -r requirements.txt
 ### 3. Running the App
 
 ```bash
-streamlit run main.py
+streamlit run UI/app.py
 ```
 
 The app will open in your browser. If any required data files are missing, you’ll be prompted to add them.
