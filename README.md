@@ -1,4 +1,4 @@
-#CItyWise : A Smart City Transportation Optimization System
+#nCItyWise : A Smart City Transportation Optimization System
 
 **CityWise**: A Streamlit-powered platform for urban mobility analytics, route planning, and public transit optimization in smart cities.
 
